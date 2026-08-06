@@ -1,0 +1,105 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ray-head:
+    image: ghcr.io/docling-project/docling-serve-cu128:v1.29.0
+    command: >
+      ray start --head --port=6379 --dashboard-host=0.0.0.0
+      --num-cpus=0 --block
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      RAY_LOG_TO_STDERR: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ray", "health-check", "--address=127.0.0.1:6379"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ray-worker:
+    image: ghcr.io/docling-project/docling-serve-cu128:v1.29.0
+    command: >
+      ray start --address=ray-head:6379 --num-cpus=4 --block
+    shm_size: "8gb"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      RAY_LOG_TO_STDERR: "1"
+      RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      ray-head:
+        condition: service_healthy
+
+  docling-serve:
+    image: ghcr.io/docling-project/docling-serve-cu128:v1.29.0
+    ports:
+      - "5001:5001"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      DOCLING_SERVE_ENABLE_UI: "true"
+
+      # Engine selection
+      DOCLING_SERVE_ENG_KIND: "ray"
+
+      # Cluster connection
+      DOCLING_SERVE_ENG_RAY_ADDRESS: "ray://ray-head:10001"
+      DOCLING_SERVE_ENG_RAY_NAMESPACE: "docling"
+      DOCLING_SERVE_ENG_RAY_REDIS_URL: "redis://redis:6379/"
+
+      # Autoscaling: pinned to exactly 1 warm converter replica (10GB VRAM budget)
+      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "1"
+      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "1"
+      DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"
+
+      # Concurrency: 2 slices in flight per replica, matched at the per-tenant dispatch gate
+      DOCLING_SERVE_ENG_RAY_MAX_ONGOING_REQUESTS_PER_REPLICA: "2"
+      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "2"
+
+      # PDF page-slice fan-out (off by default upstream — must opt in explicitly)
+      DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"
+      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      ray-head:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:
