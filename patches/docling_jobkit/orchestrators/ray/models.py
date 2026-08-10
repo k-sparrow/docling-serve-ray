@@ -1,0 +1,313 @@
+"""Data models for Ray orchestrator."""
+
+import datetime
+from dataclasses import dataclass
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+from docling.datamodel.service.callbacks import ProcessedDocsItem
+from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.responses import PublicFailureInfo
+from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
+
+from docling_jobkit.connectors.source_processor import DocumentChunk
+from docling_jobkit.datamodel.result import DoclingTaskResult
+from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task_meta import TaskStatus
+
+
+class TenantLimits(BaseModel):
+    """Per-tenant resource limits and current usage.
+
+    Attributes:
+        max_concurrent_tasks: Maximum tasks being scheduled/processed simultaneously
+        max_queued_tasks: Maximum tasks in queue (None = unlimited)
+        max_documents: Maximum documents being processed (None = unlimited, off by default)
+        active_tasks: Currently being processed
+        queued_tasks: Waiting in queue
+        active_documents: Currently being processed
+    """
+
+    max_concurrent_tasks: int = Field(
+        default=5, description="Max tasks being scheduled/processed simultaneously"
+    )
+    max_queued_tasks: Optional[int] = Field(
+        default=None, description="Max tasks in queue (None = unlimited)"
+    )
+    max_documents: Optional[int] = Field(
+        default=None, description="Max documents being processed (None = unlimited)"
+    )
+    active_tasks: int = Field(default=0, description="Currently being processed")
+    queued_tasks: int = Field(default=0, description="Waiting in queue")
+    active_documents: int = Field(default=0, description="Currently being processed")
+    converter_units: int = Field(
+        default=0,
+        description=(
+            "In-flight converter calls (fan-out children + slices + passthrough), "
+            "capped per tenant at max_concurrent_tasks"
+        ),
+    )
+
+
+class TenantStats(BaseModel):
+    """Per-tenant statistics for tracking usage and performance.
+
+    Attributes:
+        total_tasks: Total number of tasks submitted
+        total_documents: Total number of documents processed
+        successful_documents: Number of successfully processed documents
+        failed_documents: Number of failed documents
+    """
+
+    total_tasks: int = Field(default=0, description="Total tasks submitted")
+    total_documents: int = Field(default=0, description="Total documents processed")
+    successful_documents: int = Field(
+        default=0, description="Successfully processed documents"
+    )
+    failed_documents: int = Field(default=0, description="Failed documents")
+
+
+class TenantTaskCounters(BaseModel):
+    """Per-tenant monotonic task-lifecycle counters.
+
+    These are cumulative, never-decremented counters incremented atomically at
+    each task state transition (queued -> dispatched -> started -> terminal).
+    Because they persist in Redis and only ever increase, Prometheus can read
+    them at any scrape interval without losing transitions that happen between
+    scrapes. Exposed by docling-serve as Prometheus counters; instantaneous
+    occupancy (currently running/dispatched) is derived in Grafana from the
+    differences between these counters.
+
+    These count tasks, not documents: the number of documents in a task is only
+    known once the coordinator actor expands the sources (e.g. iterating an S3
+    bucket), so it cannot be attributed at enqueue/dispatch/start time. Per-
+    document outcome counts live in TenantStats instead.
+    """
+
+    tasks_enqueued_total: int = Field(default=0, description="Tasks enqueued")
+    tasks_dispatched_total: int = Field(default=0, description="Tasks dispatched")
+    tasks_started_total: int = Field(default=0, description="Tasks started")
+    tasks_succeeded_total: int = Field(default=0, description="Tasks succeeded")
+    tasks_failed_total: int = Field(default=0, description="Tasks failed")
+
+
+class TaskUpdate(BaseModel):
+    """Internal task status update message for pub/sub communication.
+
+    Used to communicate task status changes between Ray actors and the orchestrator
+    via Redis pub/sub.
+
+    Attributes:
+        task_id: Unique task identifier
+        task_status: Current status of the task
+        result_key: Redis key where result is stored (if completed)
+        error_message: Error message if task failed
+        progress: Task processing metadata (progress, counts, etc.)
+    """
+
+    task_id: str = Field(description="Unique task identifier")
+    task_status: TaskStatus = Field(description="Current status of the task")
+    result_key: Optional[str] = Field(
+        default=None, description="Redis key where result is stored"
+    )
+    error_message: Optional[str] = Field(
+        default=None, description="Error message if task failed"
+    )
+    failure: Optional[PublicFailureInfo] = Field(
+        default=None, description="Structured failure info if task failed"
+    )
+    progress: Optional[TaskProcessingMeta] = Field(
+        default=None, description="Task processing metadata"
+    )
+
+
+class RedisTaskMetadata(BaseModel):
+    """Durable task metadata stored in Redis for Ray task recovery.
+
+    This model intentionally captures orchestration-only state that is not part
+    of the public service API models. It exists so a restarted API/orchestrator
+    process can reconstruct task state from Redis without depending on
+    in-memory bookkeeping.
+    """
+
+    task_id: str = Field(description="Unique task identifier")
+    tenant_id: str = Field(description="Tenant that owns the task")
+    status: TaskStatus = Field(description="Current task status")
+    task_type: TaskType = Field(description="Task type")
+    task_size: int = Field(description="Number of documents associated with the task")
+    created_at: datetime.datetime = Field(
+        description="UTC timestamp when the task metadata was created"
+    )
+    last_update_at: datetime.datetime = Field(
+        description="UTC timestamp for the last task metadata update"
+    )
+    error_message: Optional[str] = Field(
+        default=None, description="Failure message if the task failed"
+    )
+    failure: Optional[PublicFailureInfo] = Field(
+        default=None, description="Structured failure info if the task failed"
+    )
+    started_at: Optional[datetime.datetime] = Field(
+        default=None, description="UTC timestamp when processing started"
+    )
+    finished_at: Optional[datetime.datetime] = Field(
+        default=None, description="UTC timestamp when processing finished"
+    )
+    retry_count: int = Field(
+        default=0, description="Recorded retry counter for recovery bookkeeping"
+    )
+
+    @classmethod
+    def _parse_optional_datetime(
+        cls, raw_value: Optional[str]
+    ) -> Optional[datetime.datetime]:
+        if raw_value is None or raw_value == "null":
+            return None
+        return datetime.datetime.fromisoformat(raw_value)
+
+    @classmethod
+    def from_redis_mapping(
+        cls, redis_mapping: dict[str, str]
+    ) -> Optional["RedisTaskMetadata"]:
+        created_at_raw = redis_mapping.get("created_at")
+        last_update_at_raw = redis_mapping.get("last_update_at")
+        if created_at_raw is None or last_update_at_raw is None:
+            return None
+
+        created_at = cls._parse_optional_datetime(created_at_raw)
+        last_update_at = cls._parse_optional_datetime(last_update_at_raw)
+        if created_at is None or last_update_at is None:
+            return None
+
+        task_id = redis_mapping.get("task_id")
+        tenant_id = redis_mapping.get("tenant_id")
+        status = redis_mapping.get("status")
+        if task_id is None or tenant_id is None or status is None:
+            return None
+
+        return cls(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            status=TaskStatus(status),
+            task_type=TaskType(redis_mapping.get("task_type", TaskType.CONVERT.value)),
+            task_size=int(redis_mapping.get("task_size", "0")),
+            created_at=created_at,
+            last_update_at=last_update_at,
+            error_message=redis_mapping.get("error_message"),
+            failure=(
+                PublicFailureInfo.model_validate_json(redis_mapping["failure"])
+                if redis_mapping.get("failure")
+                else None
+            ),
+            started_at=cls._parse_optional_datetime(redis_mapping.get("started_at")),
+            finished_at=cls._parse_optional_datetime(redis_mapping.get("finished_at")),
+            retry_count=int(redis_mapping.get("retry_count", "0")),
+        )
+
+    def to_task(self) -> Task:
+        return Task(
+            task_id=self.task_id,
+            task_type=self.task_type,
+            task_status=self.status,
+            sources=[],
+            metadata={"tenant_id": self.tenant_id},
+            error_message=self.error_message,
+            failure=self.failure,
+            created_at=self.created_at,
+            started_at=self.started_at,
+            finished_at=self.finished_at,
+            last_update_at=self.last_update_at,
+        )
+
+
+@dataclass(frozen=True)
+class TaskTerminalizationResult:
+    """Outcome of an idempotent terminalization attempt."""
+
+    final_status: TaskStatus
+    status_changed: bool
+    capacity_released: bool
+    result_key: Optional[str] = None
+
+
+class SliceSpec(BaseModel):
+    page_range: tuple[int, int] = Field(description="Absolute page range for the slice")
+    slice_index: int = Field(description="Ascending slice index in the slice plan")
+
+
+class SlicePlan(BaseModel):
+    total_pages: int = Field(description="Total pages in the materialized source PDF")
+    slices: list[SliceSpec] = Field(description="Slice plan in ascending page order")
+    effective_page_range: tuple[int, int] = Field(
+        description="Caller page range intersected with the source page count"
+    )
+
+
+class PassthroughTaskRequest(BaseModel):
+    kind: str = Field(default="passthrough_task")
+    task: Task = Field(description="Original parent task")
+    expected_doc_count: Optional[int] = Field(
+        default=None,
+        description="Pre-counted document total for callbacks; None means fall back to len(task.sources)",
+    )
+
+
+class MaterializedConvertRequest(BaseModel):
+    kind: str = Field(default="materialized_convert")
+    artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
+    filename: str = Field(description="Filename for the materialized PDF")
+    task: Task = Field(description="Parent task metadata with sources stripped")
+    source_count: int = Field(description="Original source count for callbacks")
+
+
+class SourceChunkConvertRequest(BaseModel):
+    kind: str = Field(default="source_chunk_convert")
+    task: Task = Field(description="Parent task metadata")
+    # NOTE: intentionally the bare generic `DocumentChunk`, not `DocumentChunk[Any, Any]`.
+    # Pydantic coerces a field's value into the exact parameterized generic class named
+    # in the annotation. `DocumentChunk[Any, Any]` is a dynamically-created subscripted
+    # generic alias with no stable, importable qualname -- Ray's cross-process
+    # (de)serialization of Serve replica call arguments can't reconstruct it and fails
+    # with `ray.exceptions.RaySystemError: System error: 'type'` (a KeyError: 'type'
+    # inside `pickle.loads` on the receiving replica), so every source-chunk fan-out
+    # call fails instantly, before the converter ever runs. The bare class carries the
+    # same validation (arbitrary_types_allowed on DocumentChunk itself still enforces a
+    # real DocumentChunk instance) without triggering that coercion.
+    chunk: DocumentChunk = Field(
+        description="Data-only source chunk to fetch and convert"
+    )
+    expected_doc_count: int = Field(
+        description="Parent task document count used for callback context"
+    )
+
+
+class SliceConvertRequest(BaseModel):
+    kind: str = Field(default="slice_convert")
+    artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
+    filename: str = Field(description="Filename for the materialized PDF")
+    options: ConvertDocumentsOptions = Field(description="Parent conversion options")
+    page_range: tuple[int, int] = Field(description="Absolute child page range")
+    slice_index: int = Field(description="Ascending child slice index")
+
+
+ConverterRequest = (
+    PassthroughTaskRequest
+    | MaterializedConvertRequest
+    | SourceChunkConvertRequest
+    | SliceConvertRequest
+)
+
+
+class ConverterTaskResult(BaseModel):
+    task_result: DoclingTaskResult = Field(description="Final task result")
+    processed_docs: list[ProcessedDocsItem] = Field(
+        default_factory=list,
+        description="Per-document processed summary for coordinator aggregation",
+    )
+
+
+class ConverterFailureResult(BaseModel):
+    failure: PublicFailureInfo = Field(
+        description="Structured failure info for expected converter-side failures"
+    )
