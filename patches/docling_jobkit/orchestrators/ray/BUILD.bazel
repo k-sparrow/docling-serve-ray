@@ -1,0 +1,81 @@
+"""Bazel/rules_oci build for the patched docling-serve image.
+
+Layers the one-line docling-jobkit fix (models.py, this package) on top of the
+official `ghcr.io/docling-project/docling-serve-cu128:v1.29.0` base via a real
+rules_oci `oci_image`, pinned to the same base image digest MODULE.bazel pulls.
+See //Containerfile for the plain `docker build` equivalent (kept as the
+non-Bazel fallback) and //upstream-issue-draft.md for the full root-cause
+writeup this patch works around: `SourceChunkConvertRequest.chunk` typed as
+the subscripted generic `DocumentChunk[Any, Any]` breaks every S3-source batch
+conversion under Ray's cross-replica-process pickling.
+"""
+
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
+load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Destination path inside the base image. NOTE: this deliberately targets
+# `lib`, not `lib64` (which the Containerfile's docker-build COPY targets) --
+# `/opt/app-root/lib64` is a symlink to `/opt/app-root/lib` in the base image,
+# not a second real tree. `docker build`'s COPY writes through that symlink at
+# the live filesystem level, landing in the real `lib` tree either way. But
+# rules_oci's declarative tar layer synthesizes explicit `type=dir` entries
+# for every parent path component (via mtree_mutate's package_dir) -- when
+# `docker load` merges a layer whose entry at `lib64` is a plain directory
+# against a base layer where that same path is a symlink, the directory wins
+# and replaces the symlink outright rather than traversing it. That silently
+# turns `lib64` into a second, sparse `docling_jobkit` tree containing only
+# what this layer added (no `__init__.py`), which Python's PEP 420
+# namespace-package resolution then discards in favor of the complete regular
+# package still sitting at `lib` -- i.e. the original, unpatched file.
+# Targeting the real `lib` path directly sidesteps this: our layer's synthetic
+# directory entries simply merge with the base layer's already-real
+# directories there, and only the leaf `models.py` file is replaced -- the
+# ordinary, uncomplicated case.
+_SITE_PACKAGES_RAY_DIR = "opt/app-root/lib/python3.12/site-packages/docling_jobkit/orchestrators/ray"
+
+exports_files(["models.py"])
+
+mtree_spec(
+    name = "models.py.spec",
+    srcs = ["models.py"],
+)
+
+mtree_mutate(
+    name = "models.py.mtree",
+    mtree = ":models.py.spec",
+    package_dir = _SITE_PACKAGES_RAY_DIR,
+    strip_prefix = package_name(),
+    # Match the base image's own ownership on this file -- uid 1001 (the
+    # app-root non-root user), gid 0/root -- confirmed via
+    # `docker run ghcr.io/.../docling-serve-cu128:v1.29.0 stat ...`, same as
+    # the Containerfile's `COPY --chown=1001:0`.
+    owner = "1001",
+    group = "0",
+)
+
+tar(
+    name = "models.py.pkg",
+    srcs = ["models.py"],
+    mtree = ":models.py.mtree",
+)
+
+oci_image(
+    name = "image",
+    base = "@docling-serve-cu128",
+    tars = [":models.py.pkg"],
+)
+
+# bazel run //patches/docling_jobkit/orchestrators/ray:tarball
+# loads the patched image into the local Docker daemon as:
+#   docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
+#   docling-serve-ray-patched:latest
+oci_load(
+    name = "tarball",
+    image = ":image",
+    repo_tags = [
+        "docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel",
+        "docling-serve-ray-patched:latest",
+    ],
+)

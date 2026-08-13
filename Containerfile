@@ -1,3 +1,10 @@
+# Non-Bazel fallback. The primary, reproducible build is
+# `bazel run //patches/docling_jobkit/orchestrators/ray:tarball` (rules_oci,
+# base image pinned by digest in MODULE.bazel) -- docker-compose.yml points at
+# that build's output tag. This file is kept as a plain `docker build`
+# equivalent producing the same fix under a different tag
+# (docling-serve-ray-patched:v1.29.0-jobkit-fix).
+#
 # Patched docling-serve image: fixes docling-jobkit's SourceChunkConvertRequest.chunk
 # field being annotated as the dynamically-parameterized generic alias
 # `DocumentChunk[Any, Any]`, which Ray's cross-process Serve-replica argument

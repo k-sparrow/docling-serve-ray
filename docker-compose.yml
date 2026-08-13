@@ -40,10 +40,11 @@ services:
       retries: 10
 
   ray-head:
-    image: docling-serve-ray-patched:v1.29.0-jobkit-fix
-    build:
-      context: .
-      dockerfile: Containerfile
+    # Built via `bazel run //patches/docling_jobkit/orchestrators/ray:tarball`
+    # (rules_oci, base image pinned by digest in MODULE.bazel) -- run that
+    # before `docker compose up`. Containerfile remains as a plain-docker
+    # fallback that produces the same fix under a different tag.
+    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
     command: >
       ray start --head --port=6379 --dashboard-host=0.0.0.0
       --num-cpus=0 --block
@@ -67,10 +68,7 @@ services:
         condition: service_healthy
 
   ray-worker:
-    image: docling-serve-ray-patched:v1.29.0-jobkit-fix
-    build:
-      context: .
-      dockerfile: Containerfile
+    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
     command: >
       ray start --address=ray-head:6379 --num-cpus=4 --block
     shm_size: "8gb"
@@ -94,10 +92,7 @@ services:
         condition: service_healthy
 
   docling-serve:
-    image: docling-serve-ray-patched:v1.29.0-jobkit-fix
-    build:
-      context: .
-      dockerfile: Containerfile
+    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
     ports:
       - "5001:5001"
     environment:
