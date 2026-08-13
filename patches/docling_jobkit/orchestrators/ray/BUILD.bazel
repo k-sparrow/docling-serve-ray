@@ -11,7 +11,7 @@ conversion under Ray's cross-replica-process pickling.
 """
 
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
-load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
 
 package(default_visibility = ["//:__subpackages__"])
 
