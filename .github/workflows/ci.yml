@@ -72,7 +72,7 @@ jobs:
       - name: bazel test //:test.docker
         env:
           DOCLING_COMPOSE_CPU_OVERLAY: "1"
-        run: bazel test //:test.docker --test_output=errors --cache_test_results=no
+        run: bazel test //:test.docker --test_output=errors --cache_test_results=no --test_env=DOCLING_COMPOSE_CPU_OVERLAY
 
   push-images:
     needs: [test, test-docker]
