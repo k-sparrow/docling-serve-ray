@@ -11,6 +11,8 @@ A GPU-accelerated [docling-serve](https://github.com/docling-project/docling-ser
 
 The facade also deletes its S3 objects and Redis record once a result has been delivered — that storage is single-use, not meant to persist past the one delivery.
 
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design write-up — the two upstream bugs that motivate this repo, a component diagram, and a step-by-step flowchart of the claim-check request path.
+
 ## What's here
 
 - **`docker-compose.yml`** — the full stack: MinIO, Redis, a Ray head/worker pair, `docling-serve` (`ray` engine, GPU passthrough, PDF page-slice fan-out tuned for a single-GPU VRAM budget), the `facade`, and `nginx` in front of both.
