@@ -1,3 +1,13 @@
+This document collects two independent findings against docling-serve v1.29.0 /
+docling-jobkit 3.2.0's Ray orchestrator. Finding 1 (below) is a correctness bug
+with a one-line fix, verified end-to-end. Finding 2 (further down) is a design
+issue in how tasks are queued for durability — no patch proposed yet, flagging
+for discussion.
+
+---
+
+# Finding 1
+
 ## Title
 `SourceChunkConvertRequest.chunk: DocumentChunk[Any, Any]` breaks every S3-source batch conversion under the Ray engine
 
@@ -178,3 +188,138 @@ Happy to open a PR with this change plus a regression test (e.g. a unit test tha
 constructs a `SourceChunkConvertRequest` and asserts it round-trips through
 `ray.cloudpickle`/a real `ray.remote` call) if that's useful — let me know if there's
 a preferred contribution process.
+
+---
+
+# Finding 2
+
+## Title
+Every convert/chunk task durably persists its full document content — and, for
+connector sources, its own credentials — into Redis, in plaintext, except when
+submitted via `/v1/convert/source/batch` with a connector (non-file) source
+
+## Summary
+
+The Ray orchestrator's task-admission path (`orchestrator.py::enqueue()`)
+base64-encodes the *entire* document body into the `Task` object it constructs,
+then durably persists that `Task` — via `json.dumps` + `RPUSH` — onto a Redis
+list backed by `--appendonly yes` (AOF). This is not specific to one endpoint:
+it is the fate of every source that arrives as a `DocumentStream`, which is
+every multipart file upload (`/v1/convert/file`, `/v1/convert/file/async`) and
+every inline `FileSourceRequest` (`/v1/convert/source`, `/v1/convert/source/async`).
+
+Separately, the serialization helper used for this persistence
+(`orchestrators/serialization.py::dump_model_with_secrets`) does not redact
+Pydantic `SecretStr`/`SecretBytes` fields — it actively *restores* their
+plaintext values before dumping, explicitly for "trusted internal transport."
+For any connector source carrying credentials (e.g. `S3SourceRequest`'s
+`access_key`/`secret_key`), those credentials are written to the same
+AOF-persisted Redis list in cleartext.
+
+The only route that avoids both problems is `/v1/convert/source/batch`
+(`BatchConvertSourcesRequest`) used with a genuine connector source (e.g.
+`S3Coordinates`) rather than an inline `FileSourceRequest`. Connector sources
+are validated via `source_factory.validate_config(source)` and never pass
+through the `DocumentStream` branch, so they stay lightweight references —
+though even here, the connector's own access credentials are still subject to
+the `dump_model_with_secrets` un-redaction described above.
+
+## Evidence
+
+`docling_jobkit/orchestrators/ray/orchestrator.py::enqueue()`:
+
+```python
+# Convert DocumentStream sources to FileSource for JSON serialization
+ray_sources: list[TaskSource] = []
+for source in sources:
+    if isinstance(source, DocumentStream):
+        encoded_doc = base64.b64encode(source.stream.read()).decode()
+        ray_sources.append(
+            FileSourceRequest(filename=source.name, base64_string=encoded_doc)
+        )
+    else:
+        ray_sources.append(source_factory.validate_config(source))
+
+task = validate_task({..., "sources": ray_sources, ...}, ...)
+...
+await self.redis_manager.enqueue_task(tenant_id, task)
+```
+
+`docling_jobkit/orchestrators/ray/redis_helper.py::enqueue_task()`:
+
+```python
+queue_key = f"tenant:{tenant_id}:tasks"
+task_json = json.dumps(dump_model_with_secrets(task))
+...
+pipe.rpush(queue_key, task_json)
+```
+
+`docling_jobkit/datamodel/task.py::Task` — `sources` carries no `exclude=True`
+marker, unlike the deprecated `options` field two lines below it in the same
+class, which is explicitly excluded from serialization. This confirms the
+omission of `sources` from durable persistence was never considered, not that
+it was deliberately included:
+
+```python
+class Task(BaseModel):
+    ...
+    sources: list[TaskSource] = []
+    ...
+    options: Annotated[
+        Optional[ConvertDocumentsOptions],
+        Field(description="Deprecated, use conversion_options instead.",
+              deprecated="Use conversion_options instead.", exclude=True),
+    ] = None
+```
+
+`docling_jobkit/orchestrators/serialization.py::dump_model_with_secrets()`:
+
+```python
+def _restore_secret_values(raw, dumped):
+    if isinstance(raw, (SecretStr, SecretBytes)):
+        return raw.get_secret_value()
+    ...
+
+def dump_model_with_secrets(model, *, exclude_none=False, serialize_as_any=False):
+    dumped = model.model_dump(mode="json", ...)
+    raw = model.model_dump(mode="python", ...)
+    return _restore_secret_values(raw, dumped)  # un-redacts SecretStr/SecretBytes
+```
+
+Confirmed the sync `/v1/convert/file` handler (`process_file` in `app.py`) is
+not exempt either — it calls the same `_enqueue_file()` → `enqueue()` path as
+the async variant, just wraps it in a blocking `_wait_task_complete()` poll.
+
+## Impact
+
+- **Storage bloat**: every converted document's full content, base64-inflated
+  (~33%), is written into an AOF file that only shrinks on a Redis-triggered
+  rewrite (`BGREWRITEAOF`) — not immediately when the task completes or is
+  dequeued. For any deployment converting large documents at volume, this
+  means Redis's disk footprint tracks total historical document volume, not
+  just in-flight queue depth.
+- **Credentials at rest in cleartext**: any connector source with embedded
+  auth (S3 access/secret keys, etc.) has those credentials written to the same
+  AOF-persisted log, undoing whatever protection `SecretStr`/`SecretBytes`
+  was meant to provide.
+- **No opt-out**: there is no request-level or deployment-level flag to
+  suppress this — it is unconditional for every `DocumentStream` source, and
+  the only structural way to avoid it (a connector-based batch source) is a
+  narrow, non-obvious corner of the API.
+
+## Suggested direction (not a concrete patch yet)
+
+- Do not durably persist raw document bytes as part of the queued `Task`.
+  Either write the content to a short-lived scratch object store (mirroring
+  what the connector-source path already does conceptually) and enqueue a
+  reference, or keep the durable queue metadata-only and pass content via
+  Ray's own object store (which does not persist to disk the way AOF does)
+  for the in-flight window only.
+- At minimum, mark connector credential fields `exclude=True` (or otherwise
+  keep them `SecretStr`-redacted) in whatever gets `RPUSH`ed to Redis, and
+  re-inject them from a trusted source at dispatch time rather than
+  round-tripping them through the durable queue in cleartext.
+
+Happy to discuss which direction the maintainers would prefer before drafting
+a patch — this is more of an architectural conversation than Finding 1's
+one-line fix.
