@@ -1,0 +1,64 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@rules_multirun//:defs.bzl", "multirun")
+
+exports_files([
+    "requirements_lock.txt",
+    "pytest.ini",
+    "docker-compose.yml",
+])
+
+# bazel run //:load.all
+# Builds and loads all three custom images into the local Docker daemon in
+# one command -- docling-serve-ray-patched, docling-serve-ray-facade,
+# docling-serve-ray-nginx. Lists the actual runnable oci_load tarball targets
+# directly rather than composing this from per-image `command()` wrappers or
+# nested multirun targets -- mirrors Artemis's own tools/oci/images/BUILD.bazel
+# `load.all`, whose comment there documents a real gotcha: a nested multirun
+# silently failed to run one of its fan-outs.
+multirun(
+    name = "load.all",
+    commands = [
+        "//patches/docling_jobkit/orchestrators/ray:tarball",
+        "//facade:tarball",
+        "//nginx:tarball",
+    ],
+)
+
+# bazel test //:test.docker
+# Bundles the three test targets that need a real Docker daemon (the
+# sandbox `bazel test //...` normally runs under doesn't expose the host's
+# Docker socket, and these also depend on images already being `docker
+# load`-ed onto it) -- tagged `manual` for exactly that reason, so a plain
+# `bazel test //...` sweep skips them. Naming this test_suite explicitly
+# bypasses that, the same way naming any one of the three directly already
+# does -- `manual` only blocks *wildcard* expansion. Uses Bazel's native
+# test_suite rather than multirun: multirun is the right tool for running
+# plain executables (see load.all above), but bundling *tests* already has
+# a purpose-built primitive that gets real test-runner semantics (exclusive
+# tag scheduling, --test_output, pass/fail summaries) instead of multirun's
+# blunt sequential subprocess execution.
+# Still requires the images loaded first -- `bazel run //:load.all` -- since
+# test_suite can only bundle test targets, not the oci_load commands that
+# put those images on the Docker daemon in the first place.
+test_suite(
+    name = "test.docker",
+    # Without this, the test_suite itself (unlike its members) has no
+    # manual tag of its own, and `bazel test //...` was empirically
+    # confirmed to sweep it in anyway -- pulling in all three
+    # Docker-dependent tests on every plain `//...` sweep, exactly the
+    # slow/non-hermetic default this whole `manual` convention exists to
+    # avoid. Tagging the suite itself `manual` restores the fast default
+    # sweep; naming it explicitly (`bazel test //:test.docker`) still
+    # works, same as naming any one of its manual members directly always
+    # has.
+    tags = ["manual"],
+    tests = [
+        "//patches/docling_jobkit/orchestrators/ray:test_patch_is_imported",
+        "//tests/integration:test_facade_docling_serve",
+        "//tests/e2e:test_stack",
+    ],
+)

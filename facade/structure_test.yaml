@@ -1,0 +1,21 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "serve entrypoint binary exists"
+    path: "/facade/serve"
+    shouldExist: true
+
+  - name: "app source is baked in"
+    path: "/facade/serve.runfiles/_main/facade/main.py"
+    shouldExist: true
+
+  - name: "fastapi dependency closure is baked in"
+    path: "/facade/serve.runfiles/rules_python++pip+pip_312_fastapi/__init__.py"
+    shouldExist: true
+
+  - name: "uvicorn dependency closure is baked in"
+    path: "/facade/serve.runfiles/rules_python++pip+pip_312_uvicorn/__init__.py"
+    shouldExist: true
+
+metadataTest:
+  entrypoint: ["/facade/serve"]

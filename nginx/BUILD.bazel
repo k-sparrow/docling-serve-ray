@@ -1,0 +1,58 @@
+"""Bazel/rules_oci build for the nginx image, baking in nginx.conf.
+
+Layers nginx.conf onto the official `nginx:1.27-alpine` base via a real
+rules_oci `oci_image`, pinned to the base image digest in MODULE.bazel --
+same pattern as the patched docling-serve image at
+//patches/docling_jobkit/orchestrators/ray and the facade image at //facade.
+"""
+
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
+
+package(default_visibility = ["//:__subpackages__"])
+
+exports_files(["nginx.conf"])
+
+mtree_spec(
+    name = "nginx.conf.spec",
+    srcs = ["nginx.conf"],
+)
+
+mtree_mutate(
+    name = "nginx.conf.mtree",
+    mtree = ":nginx.conf.spec",
+    package_dir = "etc/nginx",
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "nginx.conf.pkg",
+    srcs = ["nginx.conf"],
+    mtree = ":nginx.conf.mtree",
+)
+
+oci_image(
+    name = "image",
+    base = "@nginx_alpine",
+    tars = [":nginx.conf.pkg"],
+)
+
+container_structure_test(
+    name = "structure_test",
+    configs = ["structure_test.yaml"],
+    image = ":image",
+)
+
+# bazel run //nginx:tarball
+# loads the image into the local Docker daemon as:
+#   docling-serve-ray-nginx:bazel
+#   docling-serve-ray-nginx:latest
+oci_load(
+    name = "tarball",
+    image = ":image",
+    repo_tags = [
+        "docling-serve-ray-nginx:bazel",
+        "docling-serve-ray-nginx:latest",
+    ],
+)
