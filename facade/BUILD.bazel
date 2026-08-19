@@ -10,6 +10,7 @@ fallback, useful for a faster local iteration loop).
 
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@pip//:requirements.bzl", "requirement")
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 
@@ -27,7 +28,7 @@ py_library(
     ],
     imports = ["../"],
     deps = [
-        "@pip//aioboto3",
+        requirement("aioboto3"),
         # aioboto3 imports boto3.session directly at module load time
         # (it wraps boto3.Session with the aiobotocore async backend) --
         # rules_python's pip-parsed targets don't auto-wire a package's
@@ -35,13 +36,13 @@ py_library(
         # `aiobotocore[boto3]==2.25.1`, an extra, not a plain `boto3`
         # requirement) into the dependency graph, so it needs listing
         # explicitly even though nothing here imports it directly.
-        "@pip//boto3",
-        "@pip//fastapi",
-        "@pip//httpx",
-        "@pip//pydantic_settings",
-        "@pip//python_multipart",
-        "@pip//redis",
-        "@pip//uvicorn",
+        requirement("boto3"),
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("pydantic-settings"),
+        requirement("python-multipart"),
+        requirement("redis"),
+        requirement("uvicorn"),
     ],
 )
 
@@ -68,7 +69,7 @@ oci_image(
 
 container_structure_test(
     name = "structure_test",
-    configs = ["structure_test.yaml"],
+    configs = ["//facade/tests/structural:structure_test.yaml"],
     image = ":image",
 )
 

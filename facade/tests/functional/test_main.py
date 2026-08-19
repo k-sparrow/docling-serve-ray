@@ -1,5 +1,5 @@
 from facade.schemas import RecordKind, TaskRecord
-from facade.tests.fakes import fake_response
+from facade.tests.functional.fakes import fake_response
 
 
 def test_healthz(client):

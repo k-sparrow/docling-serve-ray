@@ -1,0 +1,7 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+# Referenced by //facade:structure_test's container_structure_test config.
+exports_files(["structure_test.yaml"])
