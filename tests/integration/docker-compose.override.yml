@@ -1,0 +1,18 @@
+# Test-only overlay: publishes facade's port to the host so the integration
+# suite can hit it directly over HTTP, bypassing nginx (that's the e2e
+# layer's job). The real docker-compose.yml deliberately doesn't publish
+# this -- nginx is the only intended public entrypoint in the real
+# deployment. Layered on top via testcontainers' DockerCompose
+# `compose_file_name=["docker-compose.yml", "tests/integration/docker-compose.override.yml"]`,
+# never used standalone.
+services:
+  facade:
+    ports:
+      - "8000"
+  # Published too so the integration suite can poll /v1/status/poll directly
+  # (the facade doesn't implement that route itself -- nginx passthrough
+  # covers it in the real deployment, and nginx is out of scope for this
+  # layer on purpose, see tests/integration/conftest.py).
+  docling-serve:
+    ports:
+      - "5001"

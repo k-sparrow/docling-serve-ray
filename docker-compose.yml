@@ -93,8 +93,8 @@ services:
 
   docling-serve:
     image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
-    ports:
-      - "5001:5001"
+    # No published host port -- nginx is the public entrypoint now (see the
+    # `nginx` service below). Reach this directly only via the docker network.
     environment:
       NVIDIA_VISIBLE_DEVICES: "all"
       DOCLING_SERVE_ENABLE_UI: "true"
@@ -136,6 +136,45 @@ services:
       ray-head:
         condition: service_healthy
       redis:
+        condition: service_healthy
+
+  facade:
+    # Built via `bazel run //facade:tarball` (rules_oci, same pattern as
+    # ray-head/ray-worker/docling-serve). Containerfile fallback:
+    # `docker build -f facade/Containerfile -t docling-serve-ray-facade .`
+    image: docling-serve-ray-facade:latest
+    environment:
+      FACADE_DOCLING_SERVE_URL: "http://docling-serve:5001"
+      FACADE_REDIS_URL: "redis://redis:6379/1"
+      FACADE_S3_ENDPOINT: "minio:9000"
+      FACADE_S3_VERIFY_SSL: "false"
+      FACADE_S3_ACCESS_KEY: "minioadmin"
+      FACADE_S3_SECRET_KEY: "minioadmin123"
+      FACADE_S3_INPUT_BUCKET: "docling-input"
+      FACADE_S3_OUTPUT_BUCKET: "docling-output"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      docling-serve:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  nginx:
+    # Built via `bazel run //nginx:tarball` (rules_oci, nginx.conf baked into
+    # the image -- same pattern as ray-head/ray-worker/docling-serve/facade).
+    image: docling-serve-ray-nginx:latest
+    ports:
+      - "5001:5001"
+    depends_on:
+      docling-serve:
+        condition: service_healthy
+      facade:
         condition: service_healthy
 
 volumes:

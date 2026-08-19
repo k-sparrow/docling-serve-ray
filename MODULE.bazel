@@ -14,6 +14,41 @@ bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "tar.bzl", version = "0.9.0")
 bazel_dep(name = "rules_oci", version = "2.3.0")
+bazel_dep(name = "container_structure_test", version = "1.22.1")
+# Pinned to the last version before rules_python 2.x's breaking change: 2.x
+# switched py_binary's default bootstrap mechanism to a build-time venv
+# symlink (bin/python3 -> the toolchain interpreter) that doesn't survive
+# being packaged into a sandboxed tar action for the facade's OCI image --
+# confirmed empirically (2.0.0 fails with "Can't open .../_serve.venv/bin/
+# python3" when facade:app_layer tries to tar it up). 2.3.1, the latest at
+# time of writing, additionally fails to even load against our pinned Bazel
+# 8.0.1 (.bazelversion): "name 'flag_alias' is not defined" in its own
+# MODULE.bazel, a newer bzlmod primitive our Bazel doesn't provide. Revisit
+# once either rules_python's docs cover the venv-bootstrap + rules_oci tar
+# combination, or this repo bumps Bazel and re-tests 2.3.1's MODULE.bazel load.
+bazel_dep(name = "rules_python", version = "1.6.3")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(python_version = "3.12")
+use_repo(python, "python_3_12")
+
+# Single hub for every Python dependency in the repo -- facade's own runtime
+# deps (source: facade/requirements.in) and all test tooling (source:
+# requirements-test.in), resolved together into one lock file
+# (requirements_lock.txt) but declared as two separate .in files so it's
+# still clear which concern needs what. Matches Artemis's own convention
+# (one `@pip` hub covering both src and tests) rather than per-package
+# hubs -- Bazel's dependency-graph reachability already keeps unrelated
+# packages out of the facade's OCI image regardless of what's in the shared
+# lock file, so splitting hubs would add Bazel plumbing for no isolation
+# benefit actually gained.
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+pip.parse(
+    hub_name = "pip",
+    python_version = "3.12",
+    requirements_lock = "//:requirements_lock.txt",
+)
+use_repo(pip, "pip")
 
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
@@ -28,3 +63,21 @@ oci.pull(
     tag = "v1.29.0",
 )
 use_repo(oci, "docling-serve-cu128", "docling-serve-cu128_linux_amd64")
+
+oci.pull(
+    name = "python_3_12_slim",
+    digest = "sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a",
+    image = "docker.io/library/python",
+    platforms = ["linux/amd64"],
+    tag = "3.12-slim",
+)
+use_repo(oci, "python_3_12_slim", "python_3_12_slim_linux_amd64")
+
+oci.pull(
+    name = "nginx_alpine",
+    digest = "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",
+    image = "docker.io/library/nginx",
+    platforms = ["linux/amd64"],
+    tag = "1.27-alpine",
+)
+use_repo(oci, "nginx_alpine", "nginx_alpine_linux_amd64")

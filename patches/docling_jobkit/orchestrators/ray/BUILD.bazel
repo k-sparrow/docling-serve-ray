@@ -11,7 +11,10 @@ conversion under Ray's cross-replica-process pickling.
 """
 
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@pip//:requirements.bzl", "requirement")
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
+load("//tools/testing:pytest.bzl", py_test = "pytest_test")
 
 package(default_visibility = ["//:__subpackages__"])
 
@@ -65,6 +68,30 @@ oci_image(
     name = "image",
     base = "@docling-serve-cu128",
     tars = [":models.py.pkg"],
+)
+
+container_structure_test(
+    name = "structure_test",
+    configs = ["structure_test.yaml"],
+    image = ":image",
+)
+
+py_test(
+    name = "test_patch_is_imported",
+    srcs = ["test_patch_is_imported.py"],
+    # Shells out to the real Docker daemon (docker.from_env()) -- needs the
+    # host's Docker socket, which Bazel's sandbox doesn't expose. Also
+    # depends on `bazel run //patches/docling_jobkit/orchestrators/ray:tarball`
+    # already having loaded the image locally; not run as part of a plain
+    # `bazel test //...`.
+    tags = [
+        "integration",
+        "local",
+        "manual",
+    ],
+    deps = [
+        requirement("docker"),
+    ],
 )
 
 # bazel run //patches/docling_jobkit/orchestrators/ray:tarball

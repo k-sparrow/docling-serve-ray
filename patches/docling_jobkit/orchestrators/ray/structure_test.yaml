@@ -1,0 +1,31 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  # Both paths must resolve to the complete patched package -- opt/app-root/lib
+  # is where this layer actually writes (see the BUILD.bazel comment on
+  # _SITE_PACKAGES_RAY_DIR), and lib64 must still be a symlink through to it.
+  # This directly regression-guards the bug this Bazel build was written to
+  # avoid: an rules_oci layer targeting lib64 turns it into a second, sparse
+  # directory that shadows the symlink instead of merging through it, silently
+  # discarding the patch (see the BUILD.bazel comment for the full mechanism).
+  - name: "patched models.py present via the real lib path"
+    path: "/opt/app-root/lib/python3.12/site-packages/docling_jobkit/orchestrators/ray/models.py"
+    shouldExist: true
+
+  - name: "patched models.py still reachable via the lib64 symlink"
+    path: "/opt/app-root/lib64/python3.12/site-packages/docling_jobkit/orchestrators/ray/models.py"
+    shouldExist: true
+
+  - name: "lib64 sibling modules still present (symlink wasn't shadowed by a sparse dir)"
+    path: "/opt/app-root/lib64/python3.12/site-packages/docling_jobkit/orchestrators/ray/__init__.py"
+    shouldExist: true
+
+  - name: "lib64 sibling modules from outside the patched package are still present too"
+    path: "/opt/app-root/lib64/python3.12/site-packages/docling_jobkit/orchestrators/ray/orchestrator.py"
+    shouldExist: true
+
+fileContentTests:
+  - name: "the DocumentChunk[Any, Any] pickling fix is actually applied"
+    path: "/opt/app-root/lib/python3.12/site-packages/docling_jobkit/orchestrators/ray/models.py"
+    expectedContents:
+      - "chunk: DocumentChunk = Field\\("

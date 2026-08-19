@@ -1,0 +1,50 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+load("//tools/testing:pytest.bzl", py_test = "pytest_test")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    visibility = ["//tests/integration:__subpackages__"],
+    deps = [
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_facade_docling_serve",
+    srcs = ["test_facade_docling_serve.py"],
+    data = [
+        "docker-compose.override.yml",
+        "//:docker-compose.yml",
+        "//tests/integration/fixtures:sample.pdf",
+    ],
+    # Shells out to the real `docker compose` against real host file paths
+    # (the compose files, the fixture PDF) and needs the Docker socket --
+    # both incompatible with Bazel's sandbox. Spins up real containers, so
+    # not run as part of a plain `bazel test //...` sweep either.
+    # `exclusive`: this and //tests/e2e:test_stack both publish MinIO on a
+    # fixed host port (9000) from the same base docker-compose.yml -- even
+    # with isolated Compose project names (COMPOSE_PROJECT_NAME, set in
+    # conftest.py), running them concurrently collides on that host port.
+    # Confirmed empirically: a concurrent `bazel test` of both failed with
+    # "Bind for 0.0.0.0:9000 failed: port is already allocated".
+    tags = [
+        "integration",
+        "local",
+        "manual",
+        "exclusive",
+    ],
+    deps = [
+        ":conftest",
+        requirement("httpx"),
+    ],
+)

@@ -1,0 +1,59 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+load("//tools/testing:pytest.bzl", py_test = "pytest_test")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "conftest.py",
+        "fakes.py",
+    ],
+    imports = ["../../"],
+    visibility = ["//facade/tests:__subpackages__"],
+    deps = [
+        "//facade:facade_lib",
+        requirement("httpx"),
+        requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_utils",
+    srcs = ["test_utils.py"],
+    imports = ["../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//facade:facade_lib",
+    ],
+)
+
+py_test(
+    name = "test_service",
+    srcs = ["test_service.py"],
+    imports = ["../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//facade:facade_lib",
+        requirement("httpx"),
+    ],
+)
+
+py_test(
+    name = "test_main",
+    srcs = ["test_main.py"],
+    imports = ["../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//facade:facade_lib",
+    ],
+)

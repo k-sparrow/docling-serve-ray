@@ -1,0 +1,78 @@
+"""Bazel/rules_oci build for the facade image.
+
+Packages the facade's py_binary (its own runfiles tree, including the pinned
+pip dependency closure from @pip) as a tar layer onto the official
+python:3.12-slim base, mirroring the pattern used for the patched
+docling-serve image at //patches/docling_jobkit/orchestrators/ray. See
+facade/Containerfile for the plain `docker build` equivalent (non-Bazel
+fallback, useful for a faster local iteration loop).
+"""
+
+load("@aspect_bazel_lib//lib:tar.bzl", "tar")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+py_library(
+    name = "facade_lib",
+    srcs = [
+        "__init__.py",
+        "dependencies.py",
+        "main.py",
+        "schemas.py",
+        "service.py",
+        "utils.py",
+    ],
+    imports = ["../"],
+    deps = [
+        "@pip//boto3",
+        "@pip//fastapi",
+        "@pip//httpx",
+        "@pip//pydantic_settings",
+        "@pip//python_multipart",
+        "@pip//redis",
+        "@pip//uvicorn",
+    ],
+)
+
+py_binary(
+    name = "serve",
+    srcs = ["serve.py"],
+    imports = ["../"],
+    main = "serve.py",
+    deps = [":facade_lib"],
+)
+
+tar(
+    name = "app_layer",
+    srcs = [":serve"],
+    include_runfiles = True,
+)
+
+oci_image(
+    name = "image",
+    base = "@python_3_12_slim",
+    entrypoint = ["/facade/serve"],
+    tars = [":app_layer"],
+)
+
+container_structure_test(
+    name = "structure_test",
+    configs = ["structure_test.yaml"],
+    image = ":image",
+)
+
+# bazel run //facade:tarball
+# loads the facade image into the local Docker daemon as:
+#   docling-serve-ray-facade:bazel
+#   docling-serve-ray-facade:latest
+oci_load(
+    name = "tarball",
+    image = ":image",
+    repo_tags = [
+        "docling-serve-ray-facade:bazel",
+        "docling-serve-ray-facade:latest",
+    ],
+)

@@ -1,0 +1,49 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+load("//tools/testing:pytest.bzl", py_test = "pytest_test")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    visibility = ["//tests/e2e:__subpackages__"],
+    deps = [
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_stack",
+    srcs = ["test_stack.py"],
+    data = [
+        "//:docker-compose.yml",
+        "//tests/integration/fixtures:sample.pdf",
+    ],
+    # Shells out to the real `docker compose` (needs the Docker socket +
+    # real host file paths, both incompatible with Bazel's sandbox), spins
+    # up the whole stack, and per Artemis's own documented e2e principle
+    # ("never run per-PR, nightly or pre-deploy cadence") shouldn't be part
+    # of a plain `bazel test //...` sweep.
+    # `exclusive`: see the matching note on //tests/integration:test_facade_docling_serve
+    # -- this and that target both publish MinIO on a fixed host port from
+    # the same base docker-compose.yml, so they can't run concurrently even
+    # with isolated Compose project names.
+    tags = [
+        "e2e",
+        "local",
+        "manual",
+        "exclusive",
+    ],
+    deps = [
+        ":conftest",
+        requirement("boto3"),
+        requirement("httpx"),
+    ],
+)
