@@ -2,9 +2,10 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 
-from facade.dependencies import Settings, get_docling_client, get_redis, get_s3_client, get_settings
+from facade.dependencies import Settings, get_docling_client, get_redis, get_s3_session, get_settings
 from facade.main import app
 from facade.tests.fakes import FakeRedis, FakeS3Client
 
@@ -30,9 +31,14 @@ def mock_docling_client() -> AsyncMock:
 
 
 @pytest.fixture
+def background_tasks() -> BackgroundTasks:
+    return BackgroundTasks()
+
+
+@pytest.fixture
 def client(settings, fake_s3, fake_redis, mock_docling_client) -> TestClient:
     app.dependency_overrides[get_settings] = lambda: settings
-    app.dependency_overrides[get_s3_client] = lambda: fake_s3
+    app.dependency_overrides[get_s3_session] = lambda: fake_s3
     app.dependency_overrides[get_redis] = lambda: fake_redis
     app.dependency_overrides[get_docling_client] = lambda: mock_docling_client
     try:

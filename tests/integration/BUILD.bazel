@@ -13,8 +13,10 @@ py_library(
     srcs = ["conftest.py"],
     visibility = ["//tests/integration:__subpackages__"],
     deps = [
+        requirement("boto3"),
         requirement("httpx"),
         requirement("pytest"),
+        requirement("redis"),
         requirement("testcontainers"),
     ],
 )
@@ -43,6 +45,9 @@ py_test(
         "manual",
         "exclusive",
     ],
+    # So //:test.docker (a root-level multirun bundling this with the other
+    # Docker-dependent manual tests) can depend on it.
+    visibility = ["//:__pkg__"],
     deps = [
         ":conftest",
         requirement("httpx"),

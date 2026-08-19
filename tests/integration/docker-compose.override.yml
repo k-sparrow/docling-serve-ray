@@ -16,3 +16,9 @@ services:
   docling-serve:
     ports:
       - "5001"
+  # Published so the integration suite can connect a real redis client and
+  # confirm the facade's post-delivery cleanup actually deletes the task
+  # record, not just infer it indirectly.
+  redis:
+    ports:
+      - "6379"

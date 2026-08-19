@@ -9,6 +9,7 @@ an otherwise thin proxy service -- the facade never touches document
 internals, it only relays already-rendered text/JSON content fetched from S3.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
@@ -56,6 +57,31 @@ class ConvertDocumentResponse(BaseModel):
     processing_time: float
     timings: dict[str, Any] = {}
     confidence: Optional[dict[str, Any]] = None
+
+
+class DocumentStatus(BaseModel):
+    """Per-document outcome for a multi-file (zip) reconstruction.
+
+    Native docling-serve's own zip response carries no per-document status at
+    all (its ZipArchiveResult is raw bytes, nothing else) -- this is a
+    deliberate facade-only addition for the case that native contract can't
+    express: a batch where some documents succeeded and others didn't. Not a
+    compatibility break, since there was never any status info to preserve
+    here in the first place.
+    """
+
+    filename: str
+    status: str  # "success" | "failed"
+
+
+@dataclass
+class ZipResult:
+    content: bytes
+    document_statuses: list[DocumentStatus]
+
+    @property
+    def has_failures(self) -> bool:
+        return any(d.status == "failed" for d in self.document_statuses)
 
 
 class TaskStatusResponse(BaseModel):

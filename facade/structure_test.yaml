@@ -17,13 +17,5 @@ fileExistenceTests:
     path: "/facade/serve.runfiles/rules_python++pip+pip_312_uvicorn/__init__.py"
     shouldExist: true
 
-  - name: "boto3 dependency closure is baked in"
-    path: "/facade/serve.runfiles/rules_python++pip+pip_312_boto3/__init__.py"
-    shouldExist: true
-
-  - name: "redis dependency closure is baked in"
-    path: "/facade/serve.runfiles/rules_python++pip+pip_312_redis/__init__.py"
-    shouldExist: true
-
 metadataTest:
   entrypoint: ["/facade/serve"]

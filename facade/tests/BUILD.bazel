@@ -57,3 +57,14 @@ py_test(
         "//facade:facade_lib",
     ],
 )
+
+py_test(
+    name = "test_passthrough",
+    srcs = ["test_passthrough.py"],
+    imports = ["../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//facade:facade_lib",
+    ],
+)

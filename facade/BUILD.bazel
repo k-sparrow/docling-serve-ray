@@ -27,6 +27,14 @@ py_library(
     ],
     imports = ["../"],
     deps = [
+        "@pip//aioboto3",
+        # aioboto3 imports boto3.session directly at module load time
+        # (it wraps boto3.Session with the aiobotocore async backend) --
+        # rules_python's pip-parsed targets don't auto-wire a package's
+        # extras-only sub-dependencies (aioboto3's actual pin is
+        # `aiobotocore[boto3]==2.25.1`, an extra, not a plain `boto3`
+        # requirement) into the dependency graph, so it needs listing
+        # explicitly even though nothing here imports it directly.
         "@pip//boto3",
         "@pip//fastapi",
         "@pip//httpx",

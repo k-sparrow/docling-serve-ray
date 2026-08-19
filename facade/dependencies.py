@@ -1,13 +1,18 @@
 """Dependency providers.
 
-Shared clients (S3, Redis, the upstream docling-serve HTTP client) are built
-once in main.py's lifespan and hung off `app.state`; these are thin
+Shared clients/sessions (S3, Redis, the upstream docling-serve HTTP client)
+are built once in main.py's lifespan and hung off `app.state`; these are thin
 `Depends()`-compatible accessors so route handlers never touch `app.state`
-directly.
+directly. The S3 session is the one exception to "one shared long-lived
+client": aioboto3.Session() itself is cheap/stateless (no I/O), but the
+actual client it produces holds a real aiohttp connector, so `s3_client()`
+below opens one fresh per call site instead of reusing a single client for
+the app's whole lifetime.
 """
 
 from functools import lru_cache
 
+import aioboto3
 import httpx
 from fastapi import Request
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -47,8 +52,28 @@ def get_redis(request: Request) -> Redis:
     return request.app.state.redis
 
 
-def get_s3_client(request: Request):
-    return request.app.state.s3_client
+def get_s3_session(request: Request) -> aioboto3.Session:
+    return request.app.state.s3_session
+
+
+def s3_client(session: aioboto3.Session, settings: Settings):
+    """Open a short-lived S3 client scoped to one unit of work.
+
+    aioboto3 clients are async context managers backed by their own aiohttp
+    connector -- not meant to be held open for the app's whole lifetime the
+    way the old sync boto3 client was. Mirrors Artemis's own
+    S3ByteStore._client() pattern: one shared Session (cheap, no I/O of its
+    own), a fresh client per operation. Returns the context manager itself
+    (not yet entered) -- callers do `async with s3_client(session, settings)
+    as client:`.
+    """
+    scheme = "https" if settings.s3_verify_ssl else "http"
+    return session.client(
+        "s3",
+        endpoint_url=f"{scheme}://{settings.s3_endpoint}",
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+    )
 
 
 def get_docling_client(request: Request) -> httpx.AsyncClient:

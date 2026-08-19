@@ -14,8 +14,10 @@ import os
 import time
 from pathlib import Path
 
+import boto3
 import httpx
 import pytest
+import redis as redis_sync
 from testcontainers.compose import DockerCompose
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -66,24 +68,51 @@ def facade_stack():
     try:
         facade_host, facade_port = compose.get_service_host_and_port("facade", 8000)
         docling_host, docling_port = compose.get_service_host_and_port("docling-serve", 5001)
+        minio_host, minio_port = compose.get_service_host_and_port("minio", 9000)
+        redis_host, redis_port = compose.get_service_host_and_port("redis", 6379)
         facade_url = f"http://{facade_host}:{facade_port}"
         docling_url = f"http://{docling_host}:{docling_port}"
         _wait_for_http(f"{facade_url}/healthz", timeout=120)
         _wait_for_http(f"{docling_url}/health", timeout=120)
-        yield facade_url, docling_url
+        yield {
+            "facade_url": facade_url,
+            "docling_url": docling_url,
+            "minio_endpoint": f"{minio_host}:{minio_port}",
+            "redis_url": f"redis://{redis_host}:{redis_port}/1",
+        }
     finally:
         compose.stop()
 
 
 @pytest.fixture(scope="session")
 def facade_client(facade_stack):
-    facade_url, _docling_url = facade_stack
-    with httpx.Client(base_url=facade_url, timeout=180.0) as client:
+    with httpx.Client(base_url=facade_stack["facade_url"], timeout=180.0) as client:
         yield client
 
 
 @pytest.fixture(scope="session")
 def docling_client(facade_stack):
-    _facade_url, docling_url = facade_stack
-    with httpx.Client(base_url=docling_url, timeout=180.0) as client:
+    with httpx.Client(base_url=facade_stack["docling_url"], timeout=180.0) as client:
         yield client
+
+
+@pytest.fixture(scope="session")
+def s3_client(facade_stack):
+    # Same credentials as the facade container's own FACADE_S3_* env vars in
+    # docker-compose.yml -- this connects as an independent client, not
+    # through the facade, so it can observe cleanup from the outside.
+    return boto3.client(
+        "s3",
+        endpoint_url=f"http://{facade_stack['minio_endpoint']}",
+        aws_access_key_id="minioadmin",
+        aws_secret_access_key="minioadmin123",
+    )
+
+
+@pytest.fixture(scope="session")
+def redis_client(facade_stack):
+    client = redis_sync.Redis.from_url(facade_stack["redis_url"], decode_responses=True)
+    try:
+        yield client
+    finally:
+        client.close()
