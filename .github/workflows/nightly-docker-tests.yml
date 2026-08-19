@@ -3,10 +3,13 @@ name: Nightly Docker tests
 # The Docker-dependent suite: the patch-import check, and the
 # testcontainers-driven integration/e2e layers (real docker compose stacks,
 # a real Docker socket, ~2 minutes). All three are tagged `manual` in Bazel
-# specifically so they never run on the fast per-PR sweep (see ci.yml) --
-# matches the "never run per-PR, nightly or pre-deploy cadence" principle
-# already documented on those test targets. Runs on a schedule instead,
-# plus workflow_dispatch for an on-demand run.
+# (that tag keeps them off `bazel test //...`, not off CI -- see ci.yml,
+# which now also runs this same suite on every PR/push via its own
+# test-docker job). This nightly schedule is intentionally redundant with
+# that: it catches environmental drift (a base image or upstream dependency
+# breaking something) independent of any code change in this repo, which a
+# PR-triggered run by definition can't. Runs on a schedule, plus
+# workflow_dispatch for an on-demand run.
 #
 # GPU note: docker-compose.yml's ray-head/ray-worker/docling-serve all hard-
 # require an NVIDIA GPU (deploy.resources.reservations.devices), which
