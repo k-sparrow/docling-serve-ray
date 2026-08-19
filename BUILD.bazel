@@ -44,6 +44,20 @@ multirun(
 # Still requires the images loaded first -- `bazel run //:load.all` -- since
 # test_suite can only bundle test targets, not the oci_load commands that
 # put those images on the Docker daemon in the first place.
+# bazel run //:push.all
+# Pushes all three custom images to GHCR in one command -- CI-only (see
+# .github/workflows/ci.yml's push-images job), same flat leaf-target list
+# convention as load.all (not composed from per-image wrappers or nested
+# multirun targets, for the same reason documented there).
+multirun(
+    name = "push.all",
+    commands = [
+        "//patches/docling_jobkit/orchestrators/ray:push",
+        "//facade:push",
+        "//nginx:push",
+    ],
+)
+
 test_suite(
     name = "test.docker",
     # Without this, the test_suite itself (unlike its members) has no

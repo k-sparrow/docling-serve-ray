@@ -11,7 +11,7 @@ fallback, useful for a faster local iteration loop).
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 load("@container_structure_test//:defs.bzl", "container_structure_test")
 load("@pip//:requirements.bzl", "requirement")
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 
 package(default_visibility = ["//:__subpackages__"])
@@ -84,4 +84,14 @@ oci_load(
         "docling-serve-ray-facade:bazel",
         "docling-serve-ray-facade:latest",
     ],
+)
+
+# bazel run //facade:push
+# Pushes to GHCR -- run in CI only (see .github/workflows/ci.yml's
+# push-images job), after tests pass, on push to main.
+oci_push(
+    name = "push",
+    image = ":image",
+    remote_tags = ["latest"],
+    repository = "ghcr.io/k-sparrow/docling-serve-ray-facade",
 )

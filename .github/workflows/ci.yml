@@ -6,6 +6,13 @@ name: CI
 # under //... on purpose: the integration/e2e/Docker-based patch-import
 # tests are deliberately excluded from this set (tagged `manual`) and run
 # on their own nightly cadence instead -- see nightly-docker-tests.yml.
+#
+# push-images runs after test succeeds, and only on push to main (not on
+# PRs -- pushing an image for every PR branch would clutter the registry
+# with ephemeral tags nobody wants). Pushes the three production images
+# (patched docling-serve, facade, nginx) to GHCR as :latest. The CI-only
+# CPU-patched image used by nightly-docker-tests.yml is deliberately never
+# pushed -- it's test infrastructure, not a deployable artifact.
 
 on:
   pull_request:
@@ -27,3 +34,29 @@ jobs:
 
       - name: bazel test //...
         run: bazel test //... --test_output=errors
+
+  push-images:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          external-cache: true
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: bazel run //:push.all
+        run: bazel run //:push.all
