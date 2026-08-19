@@ -1,8 +1,19 @@
 name: CI
 
+# lint -- ruff's lint aspect (see //tools/lint/linters.bzl), applied across
+# the whole repo and failing the build on any violation. A `bazel build
+# --aspects=...` invocation, not a `bazel test` target -- aspect_rules_lint's
+# own idiom (see Artemis's tools/lint/ for the convention this mirrors).
+# flake8 isn't included here (unlike Artemis) -- see MODULE.bazel's LINT &
+# FORMAT section for why. Runs first and gates test/test-docker: cheap,
+# fast, and catches style noise before spending time on the heavier stages.
+#
 # test -- the fast, hermetic sweep: container_structure_test targets (build
 # the OCI images, check them via container_structure_test's tar driver, no
-# Docker daemon needed) plus the facade's pytest unit suite.
+# Docker daemon needed), the facade's pytest unit suite, and
+# //tools/format:format_test (ruff/buildifier/yamlfmt formatting check --
+# it's an ordinary, non-manual test target, so it's already swept in here,
+# no separate step needed).
 #
 # test-docker -- the patch-import check plus the testcontainers-driven
 # integration/e2e layers (real docker compose stacks, a real Docker
@@ -15,20 +26,21 @@ name: CI
 # tests/ci/docker-compose.cpu.yml and DOCLING_COMPOSE_CPU_OVERLAY) --
 # verified empirically that the full claim-check round trip and e2e
 # routing both still pass running on CPU against this suite's tiny fixture
-# PDF. Runs in parallel with `test`, not gated behind it: the two exercise
-# different things, neither depends on the other's output, and parallel
-# gives faster overall feedback than serializing them would.
+# PDF. Runs in parallel with `test` (both gated behind `lint`, not each
+# other): the two exercise different things, neither depends on the other's
+# output, and parallel gives faster overall feedback than serializing them
+# would.
 #
 # Also still runs on a nightly schedule (nightly-docker-tests.yml) as an
 # environment-drift canary independent of code changes -- intentionally
 # redundant with running here on every PR/push.
 #
-# push-images runs after both test jobs succeed, and only on push to main
-# (not on PRs -- pushing an image for every PR branch would clutter the
-# registry with ephemeral tags nobody wants). Pushes the three production
-# images (patched docling-serve, facade, nginx) to GHCR as :latest. The
-# CI-only CPU-patched image is deliberately never pushed -- it's test
-# infrastructure, not a deployable artifact.
+# push-images runs after lint, test, and test-docker all succeed, and only
+# on push to main (not on PRs -- pushing an image for every PR branch would
+# clutter the registry with ephemeral tags nobody wants). Pushes the three
+# production images (patched docling-serve, facade, nginx) to GHCR as
+# :latest. The CI-only CPU-patched image is deliberately never pushed --
+# it's test infrastructure, not a deployable artifact.
 
 on:
   pull_request:
@@ -36,7 +48,27 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          external-cache: true
+
+      - name: ruff lint
+        run: |
+          bazel build --aspects=//tools/lint:linters.bzl%ruff \
+            --output_groups=rules_lint_human \
+            --@aspect_rules_lint//lint:fail_on_violation \
+            //...
+
   test:
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +84,7 @@ jobs:
         run: bazel test //... --test_output=errors
 
   test-docker:
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,7 +108,7 @@ jobs:
         run: bazel test //:test.docker --test_output=errors --cache_test_results=no --test_env=DOCLING_COMPOSE_CPU_OVERLAY
 
   push-images:
-    needs: [test, test-docker]
+    needs: [test, lint, test-docker]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

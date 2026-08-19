@@ -42,7 +42,7 @@ Pre-built images are also published to GHCR on every merge to `main`: `ghcr.io/k
 ## Testing
 
 ```bash
-bazel test //...              # fast, hermetic: container structure tests + facade unit suite, no Docker needed
+bazel test //...              # fast, hermetic: container structure tests + facade unit suite + format check, no Docker needed
 bazel test //:test.docker     # patch-import check + testcontainers-driven integration/e2e, needs a real Docker daemon and a GPU
 ```
 
@@ -50,10 +50,23 @@ The Docker-dependent suite is tagged `manual` on purpose (mirrors Artemis's own 
 
 Each of `facade/`, `nginx/`, and the ray patch has its tests split into `tests/functional/` (real test code) and `tests/structural/` (`container_structure_test` configs).
 
+### Formatting and linting
+
+Mirrors Artemis's own `tools/format/` and `tools/lint/` convention (ruff for Python, buildifier for Starlark, yamlfmt for YAML) — minus flake8, which needs a newer `rules_python` than this repo's pin allows; ruff alone covers the same ground.
+
+```bash
+bazel run //:format                                # auto-fix formatting in place
+bazel test //tools/format:format_test               # check only (also part of bazel test //...)
+bazel build --aspects=//tools/lint:linters.bzl%ruff --output_groups=rules_lint_human \
+    --@aspect_rules_lint//lint:fail_on_violation //...   # ruff lint, repo-wide
+```
+
+`docker-compose.yml` is excluded from yamlfmt via `.gitattributes` (`rules-lint-ignored`) — it hand-wraps a couple of long commands across multiple lines for readability, which YAML's folded-scalar syntax treats as equivalent to one line but a formatter would happily collapse.
+
 ## CI/CD
 
-- **`.github/workflows/ci.yml`** — `bazel test //...` on every PR and push to `main`; on push to `main` specifically, also pushes the three production images to GHCR after tests pass.
-- **`.github/workflows/nightly-docker-tests.yml`** — the Docker-dependent suite, on a daily cron plus manual dispatch.
+- **`.github/workflows/ci.yml`** — on every PR and push to `main`: `lint` (the ruff aspect above) runs first and gates `test` (`bazel test //...`) and `test-docker` (the Docker-dependent suite, CPU-only), which then run in parallel with each other. On push to `main`, once all three pass, also pushes the three production images to GHCR.
+- **`.github/workflows/nightly-docker-tests.yml`** — the Docker-dependent suite again, on a daily cron plus manual dispatch, as an environment-drift canary independent of code changes.
 
 ## Requirements
 
