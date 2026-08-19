@@ -3,7 +3,7 @@
 Layers the one-line docling-jobkit fix (models.py, this package) on top of the
 official `ghcr.io/docling-project/docling-serve-cu128:v1.29.0` base via a real
 rules_oci `oci_image`, pinned to the same base image digest MODULE.bazel pulls.
-See //Containerfile for the plain `docker build` equivalent (kept as the
+See ./Containerfile for the plain `docker build` equivalent (kept as the
 non-Bazel fallback) and //upstream-issue-draft.md for the full root-cause
 writeup this patch works around: `SourceChunkConvertRequest.chunk` typed as
 the subscripted generic `DocumentChunk[Any, Any]` breaks every S3-source batch
