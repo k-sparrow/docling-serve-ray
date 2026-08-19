@@ -1,0 +1,29 @@
+name: CI
+
+# The fast, hermetic sweep -- container_structure_test targets (build the
+# OCI images, check them via container_structure_test's tar driver, no
+# Docker daemon needed) plus the facade's pytest unit suite. Everything
+# under //... on purpose: the integration/e2e/Docker-based patch-import
+# tests are deliberately excluded from this set (tagged `manual`) and run
+# on their own nightly cadence instead -- see nightly-docker-tests.yml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          external-cache: true
+
+      - name: bazel test //...
+        run: bazel test //... --test_output=errors

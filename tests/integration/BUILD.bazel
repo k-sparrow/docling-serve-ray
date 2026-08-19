@@ -27,6 +27,7 @@ py_test(
     data = [
         "docker-compose.override.yml",
         "//:docker-compose.yml",
+        "//tests/ci:docker-compose.cpu.yml",
         "//tests/integration/fixtures:sample.pdf",
     ],
     # Shells out to the real `docker compose` against real host file paths

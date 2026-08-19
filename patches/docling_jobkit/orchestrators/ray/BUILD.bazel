@@ -70,6 +70,19 @@ oci_image(
     tars = [":models.py.pkg"],
 )
 
+# CI-only CPU variant -- same one-line patch, same v1.29.0 release, just a
+# different torch/onnxruntime backend underneath. Confirmed empirically
+# (docker run + find) that docling-serve-cpu:v1.29.0 has the identical
+# /opt/app-root/lib/python3.12/site-packages layout as the cu128 base
+# (including the same lib64 -> lib symlink), so the same tar layer applies
+# unmodified. GitHub-hosted CI runners have no GPU, so the nightly
+# Docker-dependent test suite runs this instead of :image/:tarball.
+oci_image(
+    name = "image.cpu",
+    base = "@docling-serve-cpu",
+    tars = [":models.py.pkg"],
+)
+
 container_structure_test(
     name = "structure_test",
     configs = ["tests/structural/structure_test.yaml"],
@@ -104,5 +117,16 @@ oci_load(
     repo_tags = [
         "docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel",
         "docling-serve-ray-patched:latest",
+    ],
+)
+
+# bazel run //patches/docling_jobkit/orchestrators/ray:tarball.cpu
+# loads the CI-only CPU-patched image as:
+#   docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel-cpu
+oci_load(
+    name = "tarball.cpu",
+    image = ":image.cpu",
+    repo_tags = [
+        "docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel-cpu",
     ],
 )

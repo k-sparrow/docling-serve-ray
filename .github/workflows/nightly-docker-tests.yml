@@ -1,0 +1,58 @@
+name: Nightly Docker tests
+
+# The Docker-dependent suite: the patch-import check, and the
+# testcontainers-driven integration/e2e layers (real docker compose stacks,
+# a real Docker socket, ~2 minutes). All three are tagged `manual` in Bazel
+# specifically so they never run on the fast per-PR sweep (see ci.yml) --
+# matches the "never run per-PR, nightly or pre-deploy cadence" principle
+# already documented on those test targets. Runs on a schedule instead,
+# plus workflow_dispatch for an on-demand run.
+#
+# GPU note: docker-compose.yml's ray-head/ray-worker/docling-serve all hard-
+# require an NVIDIA GPU (deploy.resources.reservations.devices), which
+# GitHub-hosted runners don't have. DOCLING_COMPOSE_CPU_OVERLAY=1 makes both
+# conftest.py fixtures layer tests/ci/docker-compose.cpu.yml on top, which
+# points those three services at the CI-only CPU-patched image instead and
+# clears the GPU reservation -- same one-line jobkit fix, same version, just
+# a different torch/onnxruntime backend. Verified empirically (not just
+# assumed) that the full claim-check round trip, cleanup, and e2e routing
+# all still pass running on CPU against the tiny fixture PDF this suite
+# uses. Loads facade/nginx (GPU-agnostic) plus the CPU-patched image
+# specifically, skipping the GPU-only :tarball entirely -- CI never needs
+# it, and it's ~3x the download size.
+#
+# `--cache_test_results=no` on the test step: Bazel has no way to know a
+# `docker load` (a side effect on the local daemon, outside its build
+# graph) changed since the last run, so a cached PASSED result here would
+# be trusted even after a real regression -- confirmed as a genuine failure
+# mode during development, not a hypothetical.
+
+on:
+  schedule:
+    # 03:00 UTC daily -- arbitrary, adjust to taste.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          external-cache: true
+
+      - name: Load images (CPU-patched docling-serve, facade, nginx)
+        run: |
+          bazel run //patches/docling_jobkit/orchestrators/ray:tarball.cpu
+          bazel run //facade:tarball
+          bazel run //nginx:tarball
+
+      - name: bazel test //:test.docker
+        env:
+          DOCLING_COMPOSE_CPU_OVERLAY: "1"
+        run: bazel test //:test.docker --test_output=errors --cache_test_results=no
