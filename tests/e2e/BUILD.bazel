@@ -24,6 +24,7 @@ py_test(
     srcs = ["test_stack.py"],
     data = [
         "//:docker-compose.yml",
+        "//tests/ci:docker-compose.cpu.yml",
         "//tests/integration/fixtures:sample.pdf",
     ],
     # Shells out to the real `docker compose` (needs the Docker socket +

@@ -1,0 +1,101 @@
+name: CI
+
+# test -- the fast, hermetic sweep: container_structure_test targets (build
+# the OCI images, check them via container_structure_test's tar driver, no
+# Docker daemon needed) plus the facade's pytest unit suite.
+#
+# test-docker -- the patch-import check plus the testcontainers-driven
+# integration/e2e layers (real docker compose stacks, a real Docker
+# socket). These are tagged `manual` in Bazel so they stay off `bazel test
+# //...` (that tag's purpose is keeping local `//...` sweeps fast and
+# GPU-independent, not keeping them off CI) -- named explicitly here via
+# `bazel test //:test.docker` instead. GitHub-hosted runners have no GPU,
+# and docker-compose.yml's ray-head/ray-worker/docling-serve all hard-
+# require one, so this runs against the CPU-patched variant instead (see
+# tests/ci/docker-compose.cpu.yml and DOCLING_COMPOSE_CPU_OVERLAY) --
+# verified empirically that the full claim-check round trip and e2e
+# routing both still pass running on CPU against this suite's tiny fixture
+# PDF. Runs in parallel with `test`, not gated behind it: the two exercise
+# different things, neither depends on the other's output, and parallel
+# gives faster overall feedback than serializing them would.
+#
+# Also still runs on a nightly schedule (nightly-docker-tests.yml) as an
+# environment-drift canary independent of code changes -- intentionally
+# redundant with running here on every PR/push.
+#
+# push-images runs after both test jobs succeed, and only on push to main
+# (not on PRs -- pushing an image for every PR branch would clutter the
+# registry with ephemeral tags nobody wants). Pushes the three production
+# images (patched docling-serve, facade, nginx) to GHCR as :latest. The
+# CI-only CPU-patched image is deliberately never pushed -- it's test
+# infrastructure, not a deployable artifact.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          external-cache: true
+
+      - name: bazel test //...
+        run: bazel test //... --test_output=errors
+
+  test-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          external-cache: true
+
+      - name: Load images (CPU-patched docling-serve, facade, nginx)
+        run: |
+          bazel run //patches/docling_jobkit/orchestrators/ray:tarball.cpu
+          bazel run //facade:tarball
+          bazel run //nginx:tarball
+
+      - name: bazel test //:test.docker
+        env:
+          DOCLING_COMPOSE_CPU_OVERLAY: "1"
+        run: bazel test //:test.docker --test_output=errors --cache_test_results=no --test_env=DOCLING_COMPOSE_CPU_OVERLAY
+
+  push-images:
+    needs: [test, test-docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          external-cache: true
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: bazel run //:push.all
+        run: bazel run //:push.all

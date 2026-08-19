@@ -12,12 +12,23 @@ replaced it with: execute the patched module inside a real container and
 assert on its resolved content, not just its filesystem presence.
 """
 
+import os
+
 import docker
 import pytest
 
 pytestmark = pytest.mark.integration
 
-_IMAGE = "docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel"
+# CI loads only the CPU-patched variant (see tests/ci/docker-compose.cpu.yml
+# and BUILD.bazel's :tarball.cpu) since GitHub-hosted runners have no GPU --
+# the GPU tag is never `docker load`-ed there and isn't pushed to a registry,
+# so pulling it fails outright. Same opt-in env var the compose-based
+# integration/e2e conftest.py fixtures key off of.
+_IMAGE = (
+    "docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel-cpu"
+    if os.environ.get("DOCLING_COMPOSE_CPU_OVERLAY")
+    else "docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel"
+)
 
 _CHECK_SCRIPT = (
     "import inspect, docling_jobkit.orchestrators.ray.models as m; "

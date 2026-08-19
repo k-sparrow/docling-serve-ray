@@ -1,0 +1,8 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+# Referenced by tests/integration and tests/e2e's DockerCompose fixtures
+# (opt-in via DOCLING_COMPOSE_CPU_OVERLAY) and by their py_test `data`.
+exports_files(["docker-compose.cpu.yml"])

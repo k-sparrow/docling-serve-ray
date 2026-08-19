@@ -65,6 +65,21 @@ oci.pull(
 )
 use_repo(oci, "docling-serve-cu128", "docling-serve-cu128_linux_amd64")
 
+# CPU-only variant of the same v1.29.0 release, digest pinned the same way.
+# CI-only: GitHub-hosted runners have no GPU, so the nightly Docker-dependent
+# test suite (tests/integration, tests/e2e) patches and runs this image
+# instead of docling-serve-cu128 -- same one-line jobkit fix, same version,
+# just a different torch/onnxruntime backend underneath. See
+# patches/docling_jobkit/orchestrators/ray/BUILD.bazel's `:tarball.cpu`.
+oci.pull(
+    name = "docling-serve-cpu",
+    digest = "sha256:51c18e0e0fec8a13ab858f03d5e9a140178d8d95962400553cb2644ad5ee84da",
+    image = "ghcr.io/docling-project/docling-serve-cpu",
+    platforms = ["linux/amd64"],
+    tag = "v1.29.0",
+)
+use_repo(oci, "docling-serve-cpu", "docling-serve-cpu_linux_amd64")
+
 oci.pull(
     name = "python_3_12_slim",
     digest = "sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a",

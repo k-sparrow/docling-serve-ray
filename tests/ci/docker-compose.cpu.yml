@@ -1,0 +1,56 @@
+# CI-only overlay: points ray-head/ray-worker/docling-serve at the
+# CPU-patched image (see patches/docling_jobkit/orchestrators/ray/BUILD.bazel's
+# `:tarball.cpu`) instead of the GPU-only docling-serve-ray-patched build the
+# real docker-compose.yml uses, and clears the NVIDIA GPU device reservation
+# those three services declare -- GitHub-hosted CI runners have no GPU, so
+# `docker compose up` would otherwise refuse to start them at all
+# ("could not select device driver 'nvidia'").
+#
+# Never used outside CI: local/production runs against a real GPU box use
+# docker-compose.yml unmodified. Layered on top via
+# `compose_file_name=[..., "tests/ci/docker-compose.cpu.yml"]`, gated behind
+# an env var each conftest.py checks (see tests/integration/conftest.py and
+# tests/e2e/conftest.py) so this file is opt-in, not a silent default.
+services:
+  ray-head:
+    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel-cpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+    deploy:
+      resources:
+        reservations:
+          # Compose's default multi-file list merge is concatenation, not
+          # replacement -- a plain `devices: []` here gets merged with the
+          # base file's GPU entry and leaves it untouched (confirmed via
+          # `docker compose config`). `!reset` is the Compose Specification's
+          # documented escape hatch for actually clearing an inherited list.
+          devices: !reset []
+
+  ray-worker:
+    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel-cpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+      RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: ""
+    deploy:
+      resources:
+        reservations:
+          # Compose's default multi-file list merge is concatenation, not
+          # replacement -- a plain `devices: []` here gets merged with the
+          # base file's GPU entry and leaves it untouched (confirmed via
+          # `docker compose config`). `!reset` is the Compose Specification's
+          # documented escape hatch for actually clearing an inherited list.
+          devices: !reset []
+
+  docling-serve:
+    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel-cpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+    deploy:
+      resources:
+        reservations:
+          # Compose's default multi-file list merge is concatenation, not
+          # replacement -- a plain `devices: []` here gets merged with the
+          # base file's GPU entry and leaves it untouched (confirmed via
+          # `docker compose config`). `!reset` is the Compose Specification's
+          # documented escape hatch for actually clearing an inherited list.
+          devices: !reset []

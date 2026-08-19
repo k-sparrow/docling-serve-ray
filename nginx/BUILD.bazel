@@ -8,7 +8,7 @@ same pattern as the patched docling-serve image at
 
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
 load("@container_structure_test//:defs.bzl", "container_structure_test")
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
 
 package(default_visibility = ["//:__subpackages__"])
 
@@ -55,4 +55,14 @@ oci_load(
         "docling-serve-ray-nginx:bazel",
         "docling-serve-ray-nginx:latest",
     ],
+)
+
+# bazel run //nginx:push
+# Pushes to GHCR -- run in CI only (see .github/workflows/ci.yml's
+# push-images job), after tests pass, on push to main.
+oci_push(
+    name = "push",
+    image = ":image",
+    remote_tags = ["latest"],
+    repository = "ghcr.io/k-sparrow/docling-serve-ray-nginx",
 )

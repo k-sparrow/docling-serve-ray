@@ -22,6 +22,7 @@ from testcontainers.compose import DockerCompose
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SERVICES = ["minio", "minio-init", "redis", "ray-head", "ray-worker", "docling-serve", "facade"]
+_CPU_OVERLAY = "tests/ci/docker-compose.cpu.yml"
 
 # testcontainers' DockerCompose never sets a Compose project name itself, so
 # plain `docker compose` falls back to its own default: the basename of the
@@ -31,6 +32,18 @@ _SERVICES = ["minio", "minio-init", "redis", "ray-head", "ray-worker", "docling-
 # run's containers got half-Recreated mid-way through an e2e run, breaking a
 # dependency chain with a "No such container" error). Isolate explicitly.
 os.environ["COMPOSE_PROJECT_NAME"] = "docling-serve-ray-integration"
+
+
+def _compose_files(*base_files: str) -> list[str]:
+    # GitHub-hosted CI runners have no GPU, and ray-head/ray-worker/
+    # docling-serve all hard-require one in the base compose file -- see
+    # tests/ci/docker-compose.cpu.yml's own header for the full reasoning.
+    # Opt-in via env var so local/production runs stay on the real,
+    # GPU-backed image by default.
+    files = list(base_files)
+    if os.environ.get("DOCLING_COMPOSE_CPU_OVERLAY"):
+        files.append(_CPU_OVERLAY)
+    return files
 
 
 def _wait_for_http(url: str, *, timeout: float) -> None:
@@ -51,7 +64,7 @@ def _wait_for_http(url: str, *, timeout: float) -> None:
 def facade_stack():
     compose = DockerCompose(
         context=str(_REPO_ROOT),
-        compose_file_name=["docker-compose.yml", "tests/integration/docker-compose.override.yml"],
+        compose_file_name=_compose_files("docker-compose.yml", "tests/integration/docker-compose.override.yml"),
         services=_SERVICES,
         pull=False,
         build=False,
