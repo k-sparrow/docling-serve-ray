@@ -18,14 +18,18 @@ class TestParseArtifactKey:
         assert result == (".md", "md_content", "35013")
 
     def test_prefers_the_longer_doctags_suffix_over_plain_txt(self):
-        result = parse_artifact_key("out/req-1/", "out/req-1/abc123hash/35013.doctags.txt")
+        result = parse_artifact_key(
+            "out/req-1/", "out/req-1/abc123hash/35013.doctags.txt"
+        )
         assert result == (".doctags.txt", "doctags_content", "35013")
 
     def test_returns_none_for_a_key_outside_the_prefix(self):
         assert parse_artifact_key("out/req-1/", "out/req-2/abc123hash/35013.md") is None
 
     def test_returns_none_for_an_unrecognized_extension(self):
-        assert parse_artifact_key("out/req-1/", "out/req-1/abc123hash/35013.pdf") is None
+        assert (
+            parse_artifact_key("out/req-1/", "out/req-1/abc123hash/35013.pdf") is None
+        )
 
     def test_works_with_zero_directory_nesting(self):
         # The hash directory the Ray orchestrator inserts isn't guaranteed by
@@ -84,7 +88,9 @@ class TestBuildZipArchive:
         # first draft used the original uploaded filename ("35013.pdf") as
         # the zip entry stem, producing "35013.pdf.md" instead of matching
         # docling-serve's own native "35013.md" naming.
-        result = build_zip_archive([("35013.pdf", "35013", {"md_content": (".md", b"content")})])
+        result = build_zip_archive(
+            [("35013.pdf", "35013", {"md_content": (".md", b"content")})]
+        )
         with zipfile.ZipFile(BytesIO(result.content)) as zf:
             assert "35013.md" in zf.namelist()
             assert zf.read("35013.md") == b"content"

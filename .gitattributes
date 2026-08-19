@@ -1,0 +1,8 @@
+# yamlfmt (via //tools/format) re-wraps `>`-folded block scalars onto a
+# single line regardless of retain_line_breaks -- semantically identical
+# (folded scalars fold linebreaks into spaces either way) but destroys the
+# deliberate multi-line formatting of docker-compose.yml's longer commands
+# and the minio-init entrypoint script. rules-lint-ignored is aspect_rules_lint's
+# own documented escape hatch for exactly this (see format_multirun's
+# disable_git_attribute_checks doc).
+docker-compose.yml rules-lint-ignored=true

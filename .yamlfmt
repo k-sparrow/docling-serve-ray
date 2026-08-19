@@ -1,0 +1,7 @@
+formatter:
+  type: basic
+  # yamlfmt's default strips blank lines between mapping keys -- destructive
+  # on the compose files here, which deliberately use blank lines to
+  # separate services. Confirmed empirically: without this, `bazel run
+  # //:format` collapsed every blank line in docker-compose.yml.
+  retain_line_breaks: true

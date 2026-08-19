@@ -13,9 +13,12 @@ def test_convert_file_async_rejects_an_empty_upload(client):
     assert response.status_code == 422
 
 
-def test_convert_file_async_returns_the_real_docling_serve_task_id(client, mock_docling_client):
+def test_convert_file_async_returns_the_real_docling_serve_task_id(
+    client, mock_docling_client
+):
     mock_docling_client.post.return_value = fake_response(
-        200, json={"task_id": "abc-123", "task_type": "convert", "task_status": "pending"}
+        200,
+        json={"task_id": "abc-123", "task_type": "convert", "task_status": "pending"},
     )
 
     response = client.post(
@@ -27,13 +30,20 @@ def test_convert_file_async_returns_the_real_docling_serve_task_id(client, mock_
     assert response.json()["task_id"] == "abc-123"
 
 
-def test_repeated_to_formats_form_fields_all_reach_docling_serve(client, mock_docling_client):
+def test_repeated_to_formats_form_fields_all_reach_docling_serve(
+    client, mock_docling_client
+):
     # Real end-to-end proof through the actual HTTP/Form-parsing layer (not
     # just service.py called directly) that a repeated `to_formats` field --
     # what a real multipart client sends for a multi-value list -- survives
     # FastAPI's Form() parsing intact, with none of the values dropped.
     mock_docling_client.post.return_value = fake_response(
-        200, json={"task_id": "multi-format-task", "task_type": "convert", "task_status": "pending"}
+        200,
+        json={
+            "task_id": "multi-format-task",
+            "task_type": "convert",
+            "task_status": "pending",
+        },
     )
 
     response = client.post(
@@ -47,7 +57,9 @@ def test_repeated_to_formats_form_fields_all_reach_docling_serve(client, mock_do
     assert posted_body["options"] == {"to_formats": ["md", "json"]}
 
 
-def test_result_for_an_unrecorded_task_id_passes_through_docling_serve(client, mock_docling_client):
+def test_result_for_an_unrecorded_task_id_passes_through_docling_serve(
+    client, mock_docling_client
+):
     mock_docling_client.get.return_value = fake_response(
         200, json={"num_converted": 1, "num_succeeded": 1}
     )
@@ -92,11 +104,14 @@ def test_convert_file_sync_returns_reconstructed_content_in_one_round_trip(
     client, mock_docling_client, fake_s3, settings
 ):
     mock_docling_client.post.return_value = fake_response(
-        200, json={"task_id": "sync-task", "task_type": "convert", "task_status": "pending"}
+        200,
+        json={"task_id": "sync-task", "task_type": "convert", "task_status": "pending"},
     )
     mock_docling_client.get.side_effect = [
         fake_response(200, json={"task_status": "success"}),  # wait_for_completion poll
-        fake_response(200, json={"num_converted": 1, "num_succeeded": 1, "processing_time": 1.0}),
+        fake_response(
+            200, json={"num_converted": 1, "num_succeeded": 1, "processing_time": 1.0}
+        ),
     ]
 
     response = client.post(
@@ -117,9 +132,12 @@ def test_convert_file_sync_returns_504_when_conversion_never_completes(
     settings.max_sync_wait_seconds = 0.05
     settings.sync_poll_interval_seconds = 0.01
     mock_docling_client.post.return_value = fake_response(
-        200, json={"task_id": "slow-task", "task_type": "convert", "task_status": "pending"}
+        200,
+        json={"task_id": "slow-task", "task_type": "convert", "task_status": "pending"},
     )
-    mock_docling_client.get.return_value = fake_response(200, json={"task_status": "started"})
+    mock_docling_client.get.return_value = fake_response(
+        200, json={"task_status": "started"}
+    )
 
     response = client.post(
         "/v1/convert/file",
@@ -134,7 +152,12 @@ def test_convert_file_async_multi_file_result_returns_a_zip(
     client, mock_docling_client, fake_s3, settings
 ):
     mock_docling_client.post.return_value = fake_response(
-        200, json={"task_id": "multi-task", "task_type": "convert", "task_status": "pending"}
+        200,
+        json={
+            "task_id": "multi-task",
+            "task_type": "convert",
+            "task_status": "pending",
+        },
     )
 
     submit = client.post(
@@ -151,7 +174,9 @@ def test_convert_file_async_multi_file_result_returns_a_zip(
     # the fixed input prefix is known ahead of time, so recover the real one
     # from what actually got uploaded rather than trying to predict it.
     input_prefix = settings.s3_input_prefix
-    uploaded_key = next(key for _bucket, key in fake_s3.objects if key.startswith(input_prefix))
+    uploaded_key = next(
+        key for _bucket, key in fake_s3.objects if key.startswith(input_prefix)
+    )
     request_id = uploaded_key[len(input_prefix) :].split("/", 1)[0]
 
     fake_s3.put_object(

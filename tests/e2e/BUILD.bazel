@@ -38,9 +38,9 @@ py_test(
     # with isolated Compose project names.
     tags = [
         "e2e",
+        "exclusive",
         "local",
         "manual",
-        "exclusive",
     ],
     # So //:test.docker (a root-level multirun bundling this with the other
     # Docker-dependent manual tests) can depend on it.

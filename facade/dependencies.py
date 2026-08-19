@@ -24,7 +24,9 @@ class Settings(BaseSettings):
 
     docling_serve_url: str = "http://docling-serve:5001"
     redis_url: str = "redis://redis:6379/1"
-    record_ttl_seconds: int = 3600 * 24 * 7  # matches docling-serve's max_document_timeout default
+    record_ttl_seconds: int = (
+        3600 * 24 * 7
+    )  # matches docling-serve's max_document_timeout default
 
     s3_endpoint: str = "minio:9000"
     s3_verify_ssl: bool = False

@@ -62,7 +62,9 @@ def build_convert_options(form) -> dict[str, object]:
         if key in _INTERCEPTED_FIELDS:
             continue
         values = form.getlist(key)
-        options[key] = values if (key in _ARRAY_FIELDS or len(values) > 1) else values[0]
+        options[key] = (
+            values if (key in _ARRAY_FIELDS or len(values) > 1) else values[0]
+        )
     return options
 
 
@@ -140,7 +142,10 @@ def build_zip_archive(
             for _field_name, (ext, body) in artifacts_by_field.items():
                 zf.writestr(f"{stem}{ext}", body)
             statuses.append(
-                DocumentStatus(filename=filename, status="success" if artifacts_by_field else "failed")
+                DocumentStatus(
+                    filename=filename,
+                    status="success" if artifacts_by_field else "failed",
+                )
             )
         zf.writestr(
             "_status.json",

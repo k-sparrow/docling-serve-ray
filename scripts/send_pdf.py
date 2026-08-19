@@ -59,7 +59,9 @@ async def _poll_once(client: httpx.AsyncClient, task_id: str, headers: dict) -> 
     )
     response.raise_for_status()
     payload = response.json()
-    print(f"  status={payload['task_status']!r} position={payload.get('task_position')}")
+    print(
+        f"  status={payload['task_status']!r} position={payload.get('task_position')}"
+    )
     return payload
 
 
@@ -137,7 +139,9 @@ async def run() -> None:
             print(f"error_message: {final_status.get('error_message')}")
             sys.exit(1)
 
-        result_response = await client.get(f"{BASE_URL}/v1/result/{task_id}", headers=headers)
+        result_response = await client.get(
+            f"{BASE_URL}/v1/result/{task_id}", headers=headers
+        )
         result_response.raise_for_status()
         print("\nraw /v1/result payload:")
         print(result_response.json())

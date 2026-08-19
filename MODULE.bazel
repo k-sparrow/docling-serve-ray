@@ -16,6 +16,20 @@ bazel_dep(name = "tar.bzl", version = "0.9.0")
 bazel_dep(name = "rules_oci", version = "2.3.0")
 bazel_dep(name = "container_structure_test", version = "1.22.1")
 bazel_dep(name = "rules_multirun", version = "0.9.0")
+
+# ------------------ LINT & FORMAT -------------------------------------------
+# Same versions Artemis pins, against the same Bazel 8.0.1 -- both are
+# independent of the rules_python version in use (they vendor their own
+# prebuilt binaries/toolchains rather than going through pip), so they don't
+# collide with this repo's rules_python 1.6.3 pin. flake8 is deliberately
+# not adopted here (unlike Artemis's tools/lint/) -- Artemis wires it via
+# py_console_script_binary, which needs rules_python 2.x's venv bootstrap,
+# the same mechanism already ruled out above for facade's OCI image build.
+# ruff alone covers the same ground (it reimplements flake8's checks) so
+# nothing is actually lost.
+bazel_dep(name = "aspect_rules_lint", version = "1.0.2")
+bazel_dep(name = "buildifier_prebuilt", version = "7.3.1")
+
 # Pinned to the last version before rules_python 2.x's breaking change: 2.x
 # switched py_binary's default bootstrap mechanism to a build-time venv
 # symlink (bin/python3 -> the toolchain interpreter) that doesn't survive
@@ -79,7 +93,6 @@ oci.pull(
     tag = "v1.29.0",
 )
 use_repo(oci, "docling-serve-cpu", "docling-serve-cpu_linux_amd64")
-
 oci.pull(
     name = "python_3_12_slim",
     digest = "sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a",
@@ -88,7 +101,6 @@ oci.pull(
     tag = "3.12-slim",
 )
 use_repo(oci, "python_3_12_slim", "python_3_12_slim_linux_amd64")
-
 oci.pull(
     name = "nginx_alpine",
     digest = "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",

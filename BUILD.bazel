@@ -3,13 +3,35 @@
 # -------------------------------------
 #
 
+load("@buildifier_prebuilt//:rules.bzl", "buildifier")
 load("@rules_multirun//:defs.bzl", "multirun")
 
 exports_files([
     "requirements_lock.txt",
     "pytest.ini",
     "docker-compose.yml",
+    "MODULE.bazel",
+    ".ruff.toml",
+    ".yamlfmt",
 ])
+
+# bazel run //:format -- auto-fixes ruff/buildifier/yamlfmt violations in place.
+# bazel test //tools/format:format_test -- same, check-only.
+alias(
+    name = "format",
+    actual = "//tools/format",
+)
+
+# bazel run //:buildifier.check
+# Ad hoc Starlark lint/diff outside the format_test flow above -- warns on
+# things buildifier's formatter alone won't catch (e.g. unsorted deps),
+# without failing the build. Mirrors Artemis's own root BUILD.bazel target.
+buildifier(
+    name = "buildifier.check",
+    exclude_patterns = ["./.git/*"],
+    lint_mode = "warn",
+    mode = "diff",
+)
 
 # bazel run //:load.all
 # Builds and loads all three custom images into the local Docker daemon in
@@ -72,7 +94,7 @@ test_suite(
     tags = ["manual"],
     tests = [
         "//patches/docling_jobkit/orchestrators/ray:test_patch_is_imported",
-        "//tests/integration:test_facade_docling_serve",
         "//tests/e2e:test_stack",
+        "//tests/integration:test_facade_docling_serve",
     ],
 )

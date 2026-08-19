@@ -46,7 +46,11 @@ _RECORD_KEY_PREFIX = "facade:task:"
 # as bare, unhandled exceptions straight through to FastAPI's default 500
 # handler with an internal stack trace leaking to the client. Caught
 # centrally here and re-raised as a clean 502 instead.
-_TRANSPORT_ERRORS = (httpx.HTTPError, botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError)
+_TRANSPORT_ERRORS = (
+    httpx.HTTPError,
+    botocore.exceptions.BotoCoreError,
+    botocore.exceptions.ClientError,
+)
 
 _F = TypeVar("_F", bound=Callable[..., Coroutine[Any, Any, Any]])
 
@@ -59,7 +63,9 @@ def _translate_transport_errors(func: _F) -> _F:
         except HTTPException:
             raise
         except _TRANSPORT_ERRORS as exc:
-            raise HTTPException(status_code=502, detail=f"Upstream unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"Upstream unavailable: {exc}"
+            ) from exc
 
     return wrapper  # type: ignore[return-value]
 
@@ -85,8 +91,14 @@ async def _cleanup_task_storage(
     try:
         async with open_s3_client(s3_session, settings) as s3_client:
             for bucket, prefix in (
-                (settings.s3_input_bucket, f"{settings.s3_input_prefix}{record.request_id}/"),
-                (settings.s3_output_bucket, f"{settings.s3_output_prefix}{record.request_id}/"),
+                (
+                    settings.s3_input_bucket,
+                    f"{settings.s3_input_prefix}{record.request_id}/",
+                ),
+                (
+                    settings.s3_output_bucket,
+                    f"{settings.s3_output_prefix}{record.request_id}/",
+                ),
             ):
                 keys = await list_artifacts(s3_client, bucket=bucket, prefix=prefix)
                 if keys:
@@ -96,7 +108,9 @@ async def _cleanup_task_storage(
                     )
         await redis.delete(_record_key(task_id))
     except Exception:
-        _log.exception("Cleanup failed for task %s (request %s)", task_id, record.request_id)
+        _log.exception(
+            "Cleanup failed for task %s (request %s)", task_id, record.request_id
+        )
 
 
 @_translate_transport_errors
@@ -202,7 +216,11 @@ async def submit_file_upload(
 
 @_translate_transport_errors
 async def wait_for_completion(
-    *, task_id: str, tenant_id: str | None, settings: Settings, docling_client: httpx.AsyncClient
+    *,
+    task_id: str,
+    tenant_id: str | None,
+    settings: Settings,
+    docling_client: httpx.AsyncClient,
 ) -> bool:
     """Mirrors docling-serve's own _wait_task_complete for the sync endpoint."""
     headers = {settings.tenant_id_header: tenant_id} if tenant_id else {}
@@ -253,17 +271,25 @@ async def resolve_result(
 
     prefix = f"{settings.s3_output_prefix}{record.request_id}/"
     async with open_s3_client(s3_session, settings) as s3_client:
-        grouped = await fetch_artifacts_by_stem(s3_client, bucket=settings.s3_output_bucket, prefix=prefix)
+        grouped = await fetch_artifacts_by_stem(
+            s3_client, bucket=settings.s3_output_bucket, prefix=prefix
+        )
 
     stems = [filename.rsplit(".", 1)[0] for filename in record.filenames]
 
     background_tasks.add_task(
-        _cleanup_task_storage, s3_session=s3_session, redis=redis, settings=settings, task_id=task_id, record=record
+        _cleanup_task_storage,
+        s3_session=s3_session,
+        redis=redis,
+        settings=settings,
+        task_id=task_id,
+        record=record,
     )
 
     if record.as_zip or len(record.filenames) > 1:
         zip_entries = [
-            (filename, stem, grouped.get(stem, {})) for filename, stem in zip(record.filenames, stems)
+            (filename, stem, grouped.get(stem, {}))
+            for filename, stem in zip(record.filenames, stems)
         ]
         return build_zip_archive(zip_entries)
 

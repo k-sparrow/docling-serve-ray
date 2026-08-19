@@ -1,0 +1,30 @@
+"""Formatting, mirroring Artemis's tools/format/BUILD.bazel: ruff for Python,
+buildifier for Starlark (BUILD.bazel/MODULE.bazel/*.bzl), yamlfmt for YAML
+(docker-compose.yml, GitHub workflows, structure_test.yaml configs).
+"""
+
+load("@aspect_rules_lint//format:defs.bzl", "format_multirun", "format_test")
+
+# bazel run //:format -- writes fixes in place.
+format_multirun(
+    name = "format",
+    python = "@aspect_rules_lint//format:ruff",
+    starlark = "@buildifier_prebuilt//:buildifier",
+    visibility = ["//:__subpackages__"],
+    yaml = "@aspect_rules_lint//format:yamlfmt",
+)
+
+# bazel test //tools/format:format_test -- checks only, fails on diff.
+# no_sandbox + workspace: lets the formatters walk the whole repo tree rather
+# than just this package's sandboxed inputs -- same as Artemis's own
+# format_test, except pointed at //:MODULE.bazel (this repo is bzlmod-only,
+# no WORKSPACE.bazel file exists to anchor on).
+format_test(
+    name = "format_test",
+    size = "small",
+    no_sandbox = True,
+    python = "@aspect_rules_lint//format:ruff",
+    starlark = "@buildifier_prebuilt//:buildifier",
+    workspace = "//:MODULE.bazel",
+    yaml = "@aspect_rules_lint//format:yamlfmt",
+)

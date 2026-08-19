@@ -21,7 +21,8 @@ class TestSubmitFileUpload:
     ):
         docling_client = AsyncMock(spec=httpx.AsyncClient)
         docling_client.post.return_value = fake_response(
-            200, json={"task_id": "t1", "task_type": "convert", "task_status": "pending"}
+            200,
+            json={"task_id": "t1", "task_type": "convert", "task_status": "pending"},
         )
 
         result = await service.submit_file_upload(
@@ -43,7 +44,9 @@ class TestSubmitFileUpload:
         assert "35013.pdf" not in json.dumps(posted_body)
         assert len(fake_s3.objects) == 1
 
-    async def test_to_formats_reaches_docling_serve_unmodified(self, settings, fake_s3, fake_redis):
+    async def test_to_formats_reaches_docling_serve_unmodified(
+        self, settings, fake_s3, fake_redis
+    ):
         # Whatever list the caller passes lands byte-for-byte in the posted
         # body's `options.to_formats`, no filtering or truncation anywhere in
         # submit_file_upload. Regression test for a real bug: the body key
@@ -58,7 +61,8 @@ class TestSubmitFileUpload:
         # was itself invalidated by making the identical key-name mistake.
         docling_client = AsyncMock(spec=httpx.AsyncClient)
         docling_client.post.return_value = fake_response(
-            200, json={"task_id": "t10", "task_type": "convert", "task_status": "pending"}
+            200,
+            json={"task_id": "t10", "task_type": "convert", "task_status": "pending"},
         )
 
         await service.submit_file_upload(
@@ -75,10 +79,13 @@ class TestSubmitFileUpload:
         posted_body = docling_client.post.call_args.kwargs["json"]
         assert posted_body["options"] == {"to_formats": ["md", "json"]}
 
-    async def test_records_a_task_record_keyed_by_the_real_task_id(self, settings, fake_s3, fake_redis):
+    async def test_records_a_task_record_keyed_by_the_real_task_id(
+        self, settings, fake_s3, fake_redis
+    ):
         docling_client = AsyncMock(spec=httpx.AsyncClient)
         docling_client.post.return_value = fake_response(
-            200, json={"task_id": "t2", "task_type": "convert", "task_status": "pending"}
+            200,
+            json={"task_id": "t2", "task_type": "convert", "task_status": "pending"},
         )
 
         await service.submit_file_upload(
@@ -97,7 +104,9 @@ class TestSubmitFileUpload:
         assert record.kind == RecordKind.FILE_UPLOAD
         assert record.filenames == ["a.pdf", "b.pdf"]
 
-    async def test_propagates_a_docling_serve_submission_error(self, settings, fake_s3, fake_redis):
+    async def test_propagates_a_docling_serve_submission_error(
+        self, settings, fake_s3, fake_redis
+    ):
         docling_client = AsyncMock(spec=httpx.AsyncClient)
         docling_client.post.return_value = fake_response(422, text="bad request")
 
@@ -239,7 +248,13 @@ class TestResolveResult:
         )
         docling_client = AsyncMock(spec=httpx.AsyncClient)
         docling_client.get.return_value = fake_response(
-            200, json={"num_converted": 2, "num_succeeded": 1, "num_failed": 1, "processing_time": 1.0}
+            200,
+            json={
+                "num_converted": 2,
+                "num_succeeded": 1,
+                "num_failed": 1,
+                "processing_time": 1.0,
+            },
         )
 
         result = await service.resolve_result(
@@ -381,14 +396,19 @@ class TestCleanupAfterDelivery:
         assert len(background_tasks.tasks) == 1
         await background_tasks()
 
-        assert (settings.s3_input_bucket, f"{settings.s3_input_prefix}req-6/35013.pdf") not in fake_s3.objects
+        assert (
+            settings.s3_input_bucket,
+            f"{settings.s3_input_prefix}req-6/35013.pdf",
+        ) not in fake_s3.objects
         assert (
             settings.s3_output_bucket,
             f"{settings.s3_output_prefix}req-6/hash123/35013.md",
         ) not in fake_s3.objects
         assert await fake_redis.get("facade:task:t10") is None
 
-    async def test_zip_delivery_schedules_cleanup_too(self, settings, fake_s3, fake_redis, background_tasks):
+    async def test_zip_delivery_schedules_cleanup_too(
+        self, settings, fake_s3, fake_redis, background_tasks
+    ):
         await fake_redis.set(
             "facade:task:t11",
             TaskRecord(
@@ -400,10 +420,14 @@ class TestCleanupAfterDelivery:
             ).model_dump_json(),
         )
         fake_s3.put_object(
-            Bucket=settings.s3_output_bucket, Key=f"{settings.s3_output_prefix}req-7/h/a.md", Body=b"doc a"
+            Bucket=settings.s3_output_bucket,
+            Key=f"{settings.s3_output_prefix}req-7/h/a.md",
+            Body=b"doc a",
         )
         fake_s3.put_object(
-            Bucket=settings.s3_output_bucket, Key=f"{settings.s3_output_prefix}req-7/h/b.md", Body=b"doc b"
+            Bucket=settings.s3_output_bucket,
+            Key=f"{settings.s3_output_prefix}req-7/h/b.md",
+            Body=b"doc b",
         )
         docling_client = AsyncMock(spec=httpx.AsyncClient)
         docling_client.get.return_value = fake_response(
@@ -423,7 +447,11 @@ class TestCleanupAfterDelivery:
 
         await background_tasks()
 
-        remaining = [key for (bucket, key) in fake_s3.objects if bucket == settings.s3_output_bucket]
+        remaining = [
+            key
+            for (bucket, key) in fake_s3.objects
+            if bucket == settings.s3_output_bucket
+        ]
         assert remaining == []
         assert await fake_redis.get("facade:task:t11") is None
 
@@ -431,7 +459,9 @@ class TestCleanupAfterDelivery:
         self, settings, fake_s3, fake_redis, background_tasks
     ):
         docling_client = AsyncMock(spec=httpx.AsyncClient)
-        docling_client.get.return_value = fake_response(200, json={"num_converted": 1, "num_succeeded": 1})
+        docling_client.get.return_value = fake_response(
+            200, json={"num_converted": 1, "num_succeeded": 1}
+        )
 
         await service.resolve_result(
             task_id="foreign-task",
@@ -459,7 +489,9 @@ class TestCleanupAfterDelivery:
             ).model_dump_json(),
         )
         docling_client = AsyncMock(spec=httpx.AsyncClient)
-        docling_client.get.return_value = fake_response(404, json={"detail": "Task result not found."})
+        docling_client.get.return_value = fake_response(
+            404, json={"detail": "Task result not found."}
+        )
 
         await service.resolve_result(
             task_id="t12",
@@ -494,7 +526,9 @@ class TestCleanupAfterDelivery:
         # get_paginator is sync in the real client (only .paginate() is
         # async) -- override the AsyncMock default so this raises the same
         # way a real synchronous failure would.
-        broken_client.get_paginator = MagicMock(side_effect=RuntimeError("S3 unreachable"))
+        broken_client.get_paginator = MagicMock(
+            side_effect=RuntimeError("S3 unreachable")
+        )
 
         await service._cleanup_task_storage(
             s3_session=StaticS3Session(broken_client),
@@ -508,10 +542,15 @@ class TestCleanupAfterDelivery:
 class TestWaitForCompletion:
     async def test_returns_true_once_status_reaches_a_terminal_state(self, settings):
         docling_client = AsyncMock(spec=httpx.AsyncClient)
-        docling_client.get.return_value = fake_response(200, json={"task_status": "success"})
+        docling_client.get.return_value = fake_response(
+            200, json={"task_status": "success"}
+        )
 
         completed = await service.wait_for_completion(
-            task_id="t6", tenant_id=None, settings=settings, docling_client=docling_client
+            task_id="t6",
+            tenant_id=None,
+            settings=settings,
+            docling_client=docling_client,
         )
 
         assert completed is True
@@ -520,10 +559,15 @@ class TestWaitForCompletion:
         settings.max_sync_wait_seconds = 0.05
         settings.sync_poll_interval_seconds = 0.01
         docling_client = AsyncMock(spec=httpx.AsyncClient)
-        docling_client.get.return_value = fake_response(200, json={"task_status": "started"})
+        docling_client.get.return_value = fake_response(
+            200, json={"task_status": "started"}
+        )
 
         completed = await service.wait_for_completion(
-            task_id="t7", tenant_id=None, settings=settings, docling_client=docling_client
+            task_id="t7",
+            tenant_id=None,
+            settings=settings,
+            docling_client=docling_client,
         )
 
         assert completed is False
@@ -538,12 +582,16 @@ class TestTransportErrorHandling:
     clean, client-facing error.
     """
 
-    async def test_submit_file_upload_translates_an_s3_failure(self, settings, fake_redis):
+    async def test_submit_file_upload_translates_an_s3_failure(
+        self, settings, fake_redis
+    ):
         import botocore.exceptions
 
         broken_client = AsyncMock()
-        broken_client.upload_fileobj.side_effect = botocore.exceptions.EndpointConnectionError(
-            endpoint_url="http://minio:9000"
+        broken_client.upload_fileobj.side_effect = (
+            botocore.exceptions.EndpointConnectionError(
+                endpoint_url="http://minio:9000"
+            )
         )
         docling_client = AsyncMock(spec=httpx.AsyncClient)
 
@@ -597,12 +645,17 @@ class TestTransportErrorHandling:
             )
         assert exc_info.value.status_code == 502
 
-    async def test_wait_for_completion_translates_a_docling_serve_connection_error(self, settings):
+    async def test_wait_for_completion_translates_a_docling_serve_connection_error(
+        self, settings
+    ):
         docling_client = AsyncMock(spec=httpx.AsyncClient)
         docling_client.get.side_effect = httpx.ConnectError("connection refused")
 
         with pytest.raises(HTTPException) as exc_info:
             await service.wait_for_completion(
-                task_id="some-task", tenant_id=None, settings=settings, docling_client=docling_client
+                task_id="some-task",
+                tenant_id=None,
+                settings=settings,
+                docling_client=docling_client,
             )
         assert exc_info.value.status_code == 502
