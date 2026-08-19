@@ -3,7 +3,7 @@
 Layers the one-line docling-jobkit fix (models.py, this package) on top of the
 official `ghcr.io/docling-project/docling-serve-cu128:v1.29.0` base via a real
 rules_oci `oci_image`, pinned to the same base image digest MODULE.bazel pulls.
-See //Containerfile for the plain `docker build` equivalent (kept as the
+See ./Containerfile for the plain `docker build` equivalent (kept as the
 non-Bazel fallback) and //upstream-issue-draft.md for the full root-cause
 writeup this patch works around: `SourceChunkConvertRequest.chunk` typed as
 the subscripted generic `DocumentChunk[Any, Any]` breaks every S3-source batch
@@ -47,15 +47,15 @@ mtree_spec(
 
 mtree_mutate(
     name = "models.py.mtree",
+    group = "0",
     mtree = ":models.py.spec",
-    package_dir = _SITE_PACKAGES_RAY_DIR,
-    strip_prefix = package_name(),
     # Match the base image's own ownership on this file -- uid 1001 (the
     # app-root non-root user), gid 0/root -- confirmed via
     # `docker run ghcr.io/.../docling-serve-cu128:v1.29.0 stat ...`, same as
     # the Containerfile's `COPY --chown=1001:0`.
     owner = "1001",
-    group = "0",
+    package_dir = _SITE_PACKAGES_RAY_DIR,
+    strip_prefix = package_name(),
 )
 
 tar(
@@ -94,7 +94,7 @@ py_test(
     srcs = ["tests/functional/test_patch_is_imported.py"],
     # Shells out to the real Docker daemon (docker.from_env()) -- needs the
     # host's Docker socket, which Bazel's sandbox doesn't expose. Also
-    # depends on `bazel run //patches/docling_jobkit/orchestrators/ray:tarball`
+    # depends on `bazel run //src/patches/docling_jobkit/orchestrators/ray:tarball`
     # already having loaded the image locally; not run as part of a plain
     # `bazel test //...`.
     tags = [
@@ -107,7 +107,7 @@ py_test(
     ],
 )
 
-# bazel run //patches/docling_jobkit/orchestrators/ray:tarball
+# bazel run //src/patches/docling_jobkit/orchestrators/ray:tarball
 # loads the patched image into the local Docker daemon as:
 #   docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
 #   docling-serve-ray-patched:latest
@@ -120,7 +120,7 @@ oci_load(
     ],
 )
 
-# bazel run //patches/docling_jobkit/orchestrators/ray:push
+# bazel run //src/patches/docling_jobkit/orchestrators/ray:push
 # Pushes the GPU image to GHCR -- run in CI only (see
 # .github/workflows/ci.yml's push-images job), after tests pass, on push to
 # main. The CI-only :image.cpu variant is never pushed -- it's test
@@ -132,7 +132,7 @@ oci_push(
     repository = "ghcr.io/k-sparrow/docling-serve-ray-patched",
 )
 
-# bazel run //patches/docling_jobkit/orchestrators/ray:tarball.cpu
+# bazel run //src/patches/docling_jobkit/orchestrators/ray:tarball.cpu
 # loads the CI-only CPU-patched image as:
 #   docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel-cpu
 oci_load(

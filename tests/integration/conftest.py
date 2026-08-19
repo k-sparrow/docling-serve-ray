@@ -21,7 +21,15 @@ import redis as redis_sync
 from testcontainers.compose import DockerCompose
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_SERVICES = ["minio", "minio-init", "redis", "ray-head", "ray-worker", "docling-serve", "facade"]
+_SERVICES = [
+    "minio",
+    "minio-init",
+    "redis",
+    "ray-head",
+    "ray-worker",
+    "docling-serve",
+    "facade",
+]
 _CPU_OVERLAY = "tests/ci/docker-compose.cpu.yml"
 
 # testcontainers' DockerCompose never sets a Compose project name itself, so
@@ -64,7 +72,9 @@ def _wait_for_http(url: str, *, timeout: float) -> None:
 def facade_stack():
     compose = DockerCompose(
         context=str(_REPO_ROOT),
-        compose_file_name=_compose_files("docker-compose.yml", "tests/integration/docker-compose.override.yml"),
+        compose_file_name=_compose_files(
+            "docker-compose.yml", "tests/integration/docker-compose.override.yml"
+        ),
         services=_SERVICES,
         pull=False,
         build=False,
@@ -80,7 +90,9 @@ def facade_stack():
         pass
     try:
         facade_host, facade_port = compose.get_service_host_and_port("facade", 8000)
-        docling_host, docling_port = compose.get_service_host_and_port("docling-serve", 5001)
+        docling_host, docling_port = compose.get_service_host_and_port(
+            "docling-serve", 5001
+        )
         minio_host, minio_port = compose.get_service_host_and_port("minio", 9000)
         redis_host, redis_port = compose.get_service_host_and_port("redis", 6379)
         facade_url = f"http://{facade_host}:{facade_port}"

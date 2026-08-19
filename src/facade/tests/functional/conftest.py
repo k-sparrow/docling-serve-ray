@@ -5,7 +5,13 @@ import pytest
 from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 
-from facade.dependencies import Settings, get_docling_client, get_redis, get_s3_session, get_settings
+from facade.dependencies import (
+    Settings,
+    get_docling_client,
+    get_redis,
+    get_s3_session,
+    get_settings,
+)
 from facade.main import app
 from facade.tests.functional.fakes import FakeRedis, FakeS3Client
 

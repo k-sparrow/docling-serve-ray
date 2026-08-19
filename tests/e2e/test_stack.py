@@ -15,7 +15,9 @@ import pytest
 
 pytestmark = pytest.mark.e2e
 
-_SAMPLE_PDF = Path(__file__).resolve().parents[1] / "integration" / "fixtures" / "sample.pdf"
+_SAMPLE_PDF = (
+    Path(__file__).resolve().parents[1] / "integration" / "fixtures" / "sample.pdf"
+)
 
 _MINIO_ENDPOINT = "http://localhost:9000"
 _MINIO_ACCESS_KEY = "minioadmin"
@@ -30,7 +32,9 @@ def test_health_passes_through_nginx_to_docling_serve(client):
 def test_multipart_upload_round_trips_through_facade(client):
     submit = client.post(
         "/v1/convert/file/async",
-        files=[("files", ("e2e-sample.pdf", _SAMPLE_PDF.read_bytes(), "application/pdf"))],
+        files=[
+            ("files", ("e2e-sample.pdf", _SAMPLE_PDF.read_bytes(), "application/pdf"))
+        ],
     )
     assert submit.status_code == 200
     task_id = submit.json()["task_id"]
@@ -40,7 +44,9 @@ def test_multipart_upload_round_trips_through_facade(client):
     deadline = time.monotonic() + 120
     status = "pending"
     while time.monotonic() < deadline and status not in {"success", "failure"}:
-        status = client.get(f"/v1/status/poll/{task_id}", params={"wait": 10}).json()["task_status"]
+        status = client.get(f"/v1/status/poll/{task_id}", params={"wait": 10}).json()[
+            "task_status"
+        ]
     assert status == "success"
 
     result = client.get(f"/v1/result/{task_id}")
@@ -65,7 +71,9 @@ def test_native_source_batch_submission_is_unaffected_by_the_facade(client):
     request_id = uuid.uuid4().hex
     input_prefix = f"e2e-native/{request_id}/"
     s3.put_object(
-        Bucket="docling-input", Key=f"{input_prefix}sample.pdf", Body=_SAMPLE_PDF.read_bytes()
+        Bucket="docling-input",
+        Key=f"{input_prefix}sample.pdf",
+        Body=_SAMPLE_PDF.read_bytes(),
     )
 
     submit = client.post(
@@ -99,7 +107,9 @@ def test_native_source_batch_submission_is_unaffected_by_the_facade(client):
     deadline = time.monotonic() + 120
     status = "pending"
     while time.monotonic() < deadline and status not in {"success", "failure"}:
-        status = client.get(f"/v1/status/poll/{task_id}", params={"wait": 10}).json()["task_status"]
+        status = client.get(f"/v1/status/poll/{task_id}", params={"wait": 10}).json()[
+            "task_status"
+        ]
     assert status == "success"
 
     # This task_id was never submitted through the facade, so /v1/result

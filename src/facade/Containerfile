@@ -1,16 +1,17 @@
 # Non-Bazel fallback for local iteration. The primary, reproducible build is
-# the facade's Bazel/rules_oci target (see facade/BUILD.bazel), mirroring the
+# the facade's Bazel/rules_oci target (see BUILD.bazel), mirroring the
 # pattern used for the patched docling-serve image at
-# //patches/docling_jobkit/orchestrators/ray.
+# //src/patches/docling_jobkit/orchestrators/ray. Build from the repo root:
+# `docker build -f src/facade/Containerfile -t docling-serve-ray-facade .`
 
 FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY facade/requirements.in /app/requirements.in
+COPY src/facade/requirements.in /app/requirements.in
 RUN pip install --no-cache-dir -r requirements.in
 
-COPY facade /app/facade
+COPY src/facade /app/facade
 
 EXPOSE 8000
 CMD ["uvicorn", "facade.main:app", "--host", "0.0.0.0", "--port", "8000"]

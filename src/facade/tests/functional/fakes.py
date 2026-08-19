@@ -17,7 +17,9 @@ def fake_response(status_code: int, **kwargs: Any) -> httpx.Response:
     the intended HTTPStatusError -- attach one so mocked responses behave
     like real ones for anything that calls raise_for_status().
     """
-    response = httpx.Response(status_code, request=httpx.Request("GET", "http://test"), **kwargs)
+    response = httpx.Response(
+        status_code, request=httpx.Request("GET", "http://test"), **kwargs
+    )
     return response
 
 
@@ -91,7 +93,11 @@ class _FakePaginator:
         self._client = client
 
     def paginate(self, *, Bucket: str, Prefix: str) -> "_FakePageIterator":
-        keys = [key for (bucket, key) in self._client.objects if bucket == Bucket and key.startswith(Prefix)]
+        keys = [
+            key
+            for (bucket, key) in self._client.objects
+            if bucket == Bucket and key.startswith(Prefix)
+        ]
         return _FakePageIterator(keys)
 
 

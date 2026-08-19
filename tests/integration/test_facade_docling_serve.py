@@ -28,11 +28,15 @@ def _poll_until_terminal(docling_client, task_id: str) -> str:
     deadline = time.monotonic() + 120
     status = "pending"
     while time.monotonic() < deadline and status not in {"success", "failure"}:
-        status = docling_client.get(f"/v1/status/poll/{task_id}", params={"wait": 10}).json()["task_status"]
+        status = docling_client.get(
+            f"/v1/status/poll/{task_id}", params={"wait": 10}
+        ).json()["task_status"]
     return status
 
 
-def test_async_submission_returns_a_real_docling_serve_task_id(facade_client, docling_client):
+def test_async_submission_returns_a_real_docling_serve_task_id(
+    facade_client, docling_client
+):
     response = facade_client.post(
         "/v1/convert/file/async",
         files=[("files", ("sample.pdf", _sample_pdf_bytes(), "application/pdf"))],
@@ -43,14 +47,21 @@ def test_async_submission_returns_a_real_docling_serve_task_id(facade_client, do
     # Poll docling-serve directly (facade doesn't implement this route --
     # nginx passthrough covers it in the real deployment) to confirm the
     # task_id the facade returned is one docling-serve actually knows about.
-    status = docling_client.get(f"/v1/status/poll/{task_id}", params={"wait": 30}).json()
+    status = docling_client.get(
+        f"/v1/status/poll/{task_id}", params={"wait": 30}
+    ).json()
     assert status["task_id"] == task_id
 
 
 def test_result_reconstruction_against_real_s3_output(facade_client, docling_client):
     submit = facade_client.post(
         "/v1/convert/file/async",
-        files=[("files", ("integration-sample.pdf", _sample_pdf_bytes(), "application/pdf"))],
+        files=[
+            (
+                "files",
+                ("integration-sample.pdf", _sample_pdf_bytes(), "application/pdf"),
+            )
+        ],
     )
     task_id = submit.json()["task_id"]
     assert _poll_until_terminal(docling_client, task_id) == "success"
@@ -102,25 +113,36 @@ def test_multi_file_submission_returns_a_real_zip(facade_client, docling_client)
         assert "_status.json" in names
 
 
-def test_facade_response_shape_matches_native_docling_serve(facade_client, docling_client):
+def test_facade_response_shape_matches_native_docling_serve(
+    facade_client, docling_client
+):
     # docling_client talks to docling-serve's own container directly (no
     # facade, no S3 redirection) -- its /v1/convert/file is the exact same
     # route the facade intercepts, so this is the real native shape to
     # reconstruct against, not an assumption about it.
     facade_result = facade_client.post(
         "/v1/convert/file",
-        files=[("files", ("parity-sample.pdf", _sample_pdf_bytes(), "application/pdf"))],
+        files=[
+            ("files", ("parity-sample.pdf", _sample_pdf_bytes(), "application/pdf"))
+        ],
     ).json()
     native_result = docling_client.post(
         "/v1/convert/file",
-        files=[("files", ("parity-sample.pdf", _sample_pdf_bytes(), "application/pdf"))],
+        files=[
+            ("files", ("parity-sample.pdf", _sample_pdf_bytes(), "application/pdf"))
+        ],
     ).json()
 
     assert facade_result["status"] == native_result["status"] == "success"
     assert facade_result.keys() == native_result.keys()
     assert facade_result["document"].keys() == native_result["document"].keys()
-    assert facade_result["document"]["filename"] == native_result["document"]["filename"]
-    assert facade_result["document"]["md_content"] == native_result["document"]["md_content"]
+    assert (
+        facade_result["document"]["filename"] == native_result["document"]["filename"]
+    )
+    assert (
+        facade_result["document"]["md_content"]
+        == native_result["document"]["md_content"]
+    )
 
     # Known, structural deviation: the facade reconstructs its response from
     # S3-persisted output artifacts (the md/json/... files Ray wrote), which
@@ -151,7 +173,9 @@ def test_result_delivery_cleans_up_s3_and_redis_after_fetch(
 
     submit = facade_client.post(
         "/v1/convert/file/async",
-        files=[("files", ("cleanup-sample.pdf", _sample_pdf_bytes(), "application/pdf"))],
+        files=[
+            ("files", ("cleanup-sample.pdf", _sample_pdf_bytes(), "application/pdf"))
+        ],
     )
     task_id = submit.json()["task_id"]
     assert _poll_until_terminal(docling_client, task_id) == "success"
@@ -178,7 +202,12 @@ def test_result_delivery_cleans_up_s3_and_redis_after_fetch(
 def test_multi_format_reconstruction_against_real_output(facade_client, docling_client):
     submit = facade_client.post(
         "/v1/convert/file/async",
-        files=[("files", ("multi-format-sample.pdf", _sample_pdf_bytes(), "application/pdf"))],
+        files=[
+            (
+                "files",
+                ("multi-format-sample.pdf", _sample_pdf_bytes(), "application/pdf"),
+            )
+        ],
         data={"to_formats": ["md", "json"]},
     )
     assert submit.status_code == 200

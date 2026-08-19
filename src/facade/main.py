@@ -14,13 +14,28 @@ from typing import Annotated
 
 import aioboto3
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from facade import service
-from facade.dependencies import Settings, get_docling_client, get_redis, get_s3_session, get_settings
+from facade.dependencies import (
+    Settings,
+    get_docling_client,
+    get_redis,
+    get_s3_session,
+    get_settings,
+)
 from facade.schemas import ConvertDocumentResponse, TaskStatusResponse, ZipResult
 from facade.utils import build_convert_options
 
@@ -50,7 +65,9 @@ def _tenant_id(x_tenant_id: Annotated[str | None, Header()] = None) -> str | Non
     return x_tenant_id
 
 
-async def _parse_submission(request: Request) -> tuple[list[UploadFile], dict[str, object], bool]:
+async def _parse_submission(
+    request: Request,
+) -> tuple[list[UploadFile], dict[str, object], bool]:
     """Split an incoming multipart form into (files, convert_options, as_zip).
 
     Reads the raw form instead of declaring individual FastAPI Form()
@@ -120,7 +137,10 @@ async def convert_file_sync(
     )
 
     completed = await service.wait_for_completion(
-        task_id=task.task_id, tenant_id=tenant_id, settings=settings, docling_client=docling_client
+        task_id=task.task_id,
+        tenant_id=tenant_id,
+        settings=settings,
+        docling_client=docling_client,
     )
     if not completed:
         raise HTTPException(
@@ -131,7 +151,13 @@ async def convert_file_sync(
             ),
         )
     return await _finish_result(
-        task.task_id, tenant_id, settings, s3_session, redis, docling_client, background_tasks
+        task.task_id,
+        tenant_id,
+        settings,
+        s3_session,
+        redis,
+        docling_client,
+        background_tasks,
     )
 
 
@@ -146,7 +172,13 @@ async def get_result(
     docling_client: Annotated[httpx.AsyncClient, Depends(get_docling_client)],
 ):
     return await _finish_result(
-        task_id, tenant_id, settings, s3_session, redis, docling_client, background_tasks
+        task_id,
+        tenant_id,
+        settings,
+        s3_session,
+        redis,
+        docling_client,
+        background_tasks,
     )
 
 
@@ -178,10 +210,14 @@ async def _finish_result(
         headers = {"Content-Disposition": 'attachment; filename="converted_docs.zip"'}
         if result.has_failures:
             headers["X-Facade-Partial-Failure"] = "true"
-        return Response(content=result.content, media_type="application/zip", headers=headers)
+        return Response(
+            content=result.content, media_type="application/zip", headers=headers
+        )
     if isinstance(result, ConvertDocumentResponse):
         return JSONResponse(content=result.model_dump())
-    raise HTTPException(status_code=500, detail="Unexpected result type from resolve_result.")
+    raise HTTPException(
+        status_code=500, detail="Unexpected result type from resolve_result."
+    )
 
 
 @app.get("/healthz")
