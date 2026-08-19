@@ -40,7 +40,7 @@ oci_image(
 
 container_structure_test(
     name = "structure_test",
-    configs = ["structure_test.yaml"],
+    configs = ["tests/structural/structure_test.yaml"],
     image = ":image",
 )
 

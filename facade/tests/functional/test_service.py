@@ -8,7 +8,7 @@ from fastapi import HTTPException, UploadFile
 
 from facade import service
 from facade.schemas import ConvertDocumentResponse, RecordKind, TaskRecord, ZipResult
-from facade.tests.fakes import StaticS3Session, fake_response
+from facade.tests.functional.fakes import StaticS3Session, fake_response
 
 
 def _upload(name: str, content: bytes = b"%PDF-1.4 fake") -> UploadFile:

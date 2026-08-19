@@ -1,4 +1,4 @@
-from facade.tests.fakes import FakeS3Client
+from facade.tests.functional.fakes import FakeS3Client
 from facade.utils import (
     build_export_document_response,
     build_zip_archive,

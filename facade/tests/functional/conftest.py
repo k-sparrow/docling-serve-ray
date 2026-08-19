@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from facade.dependencies import Settings, get_docling_client, get_redis, get_s3_session, get_settings
 from facade.main import app
-from facade.tests.fakes import FakeRedis, FakeS3Client
+from facade.tests.functional.fakes import FakeRedis, FakeS3Client
 
 
 @pytest.fixture

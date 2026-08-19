@@ -72,13 +72,13 @@ oci_image(
 
 container_structure_test(
     name = "structure_test",
-    configs = ["structure_test.yaml"],
+    configs = ["tests/structural/structure_test.yaml"],
     image = ":image",
 )
 
 py_test(
     name = "test_patch_is_imported",
-    srcs = ["test_patch_is_imported.py"],
+    srcs = ["tests/functional/test_patch_is_imported.py"],
     # Shells out to the real Docker daemon (docker.from_env()) -- needs the
     # host's Docker socket, which Bazel's sandbox doesn't expose. Also
     # depends on `bazel run //patches/docling_jobkit/orchestrators/ray:tarball`

@@ -11,7 +11,7 @@ proves the same thing through the real HTTP/Form-parsing route, end to end.
 
 from starlette.datastructures import FormData
 
-from facade.tests.fakes import fake_response
+from facade.tests.functional.fakes import fake_response
 from facade.utils import build_convert_options
 
 
