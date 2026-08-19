@@ -14,10 +14,10 @@ The facade also deletes its S3 objects and Redis record once a result has been d
 ## What's here
 
 - **`docker-compose.yml`** — the full stack: MinIO, Redis, a Ray head/worker pair, `docling-serve` (`ray` engine, GPU passthrough, PDF page-slice fan-out tuned for a single-GPU VRAM budget), the `facade`, and `nginx` in front of both.
-- **`facade/`** — the claim-check facade (FastAPI: `main.py`/`service.py`/`dependencies.py`/`utils.py`/`schemas.py`). Streams uploads to S3 via `aioboto3` instead of buffering them in memory, so peak RAM per upload is bounded by the client's part size, not file size.
-- **`nginx/`** — `nginx.conf` baked into an image via Bazel, routing the three facade-owned paths there and everything else to `docling-serve` directly.
-- **`patches/docling_jobkit/orchestrators/ray/models.py`** — a one-line upstream fix for a real `docling-jobkit` bug: `SourceChunkConvertRequest.chunk` is typed as the dynamically-parameterized generic alias `DocumentChunk[Any, Any]`, which Ray's cross-process Serve-replica argument (de)serialization cannot reconstruct (`ray.exceptions.RaySystemError: System error: 'type'`). This breaks *every* S3-source batch conversion under the Ray engine, before the converter ever runs. Fixed here by using the bare `DocumentChunk` instead. A second, related finding — Redis durably persisting document bytes and connector credentials in plaintext — is drafted but not yet fixed; see [`upstream-issue-draft.md`](upstream-issue-draft.md).
-- **`MODULE.bazel`** plus each component's own `BUILD.bazel` — reproducible Bazel/rules_oci builds for all three images, pinned to their upstream bases by digest. Each image also has its own `Containerfile` (`patches/docling_jobkit/orchestrators/ray/` and `facade/`) as a plain-`docker build` fallback for anyone without Bazel set up.
+- **`src/facade/`** — the claim-check facade (FastAPI: `main.py`/`service.py`/`dependencies.py`/`utils.py`/`schemas.py`). Streams uploads to S3 via `aioboto3` instead of buffering them in memory, so peak RAM per upload is bounded by the client's part size, not file size.
+- **`src/nginx/`** — `nginx.conf` baked into an image via Bazel, routing the three facade-owned paths there and everything else to `docling-serve` directly.
+- **`src/patches/docling_jobkit/orchestrators/ray/models.py`** — a one-line upstream fix for a real `docling-jobkit` bug: `SourceChunkConvertRequest.chunk` is typed as the dynamically-parameterized generic alias `DocumentChunk[Any, Any]`, which Ray's cross-process Serve-replica argument (de)serialization cannot reconstruct (`ray.exceptions.RaySystemError: System error: 'type'`). This breaks *every* S3-source batch conversion under the Ray engine, before the converter ever runs. Fixed here by using the bare `DocumentChunk` instead. A second, related finding — Redis durably persisting document bytes and connector credentials in plaintext — is drafted but not yet fixed; see [`upstream-issue-draft.md`](upstream-issue-draft.md).
+- **`MODULE.bazel`** plus each component's own `BUILD.bazel` — reproducible Bazel/rules_oci builds for all three images, pinned to their upstream bases by digest. Each image also has its own `Containerfile` (`src/patches/docling_jobkit/orchestrators/ray/` and `src/facade/`) as a plain-`docker build` fallback for anyone without Bazel set up.
 - **`scripts/send_pdf.py`** — exercises the S3-source batch path end-to-end: uploads every PDF in a local directory to MinIO, submits a `/v1/convert/source/batch` job through nginx, polls until it terminates, and lists the converted output objects.
 
 ## Quickstart
@@ -48,7 +48,7 @@ bazel test //:test.docker     # patch-import check + testcontainers-driven integ
 
 The Docker-dependent suite is tagged `manual` on purpose (mirrors Artemis's own "never run per-PR, nightly or pre-deploy" principle) — it's excluded from `bazel test //...` and only runs when named explicitly, or on a nightly CI schedule. Since GitHub-hosted CI runners have no GPU, CI runs it against a CPU-only variant instead (`DOCLING_COMPOSE_CPU_OVERLAY=1`, see `tests/ci/`) — locally, against real GPU hardware, it uses the real stack unmodified.
 
-Each of `facade/`, `nginx/`, and the ray patch has its tests split into `tests/functional/` (real test code) and `tests/structural/` (`container_structure_test` configs).
+Each of `src/facade/`, `src/nginx/`, and the ray patch has its tests split into `tests/functional/` (real test code) and `tests/structural/` (`container_structure_test` configs).
 
 ### Formatting and linting
 

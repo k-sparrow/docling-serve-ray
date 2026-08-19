@@ -40,7 +40,7 @@ services:
       retries: 10
 
   ray-head:
-    # Built via `bazel run //patches/docling_jobkit/orchestrators/ray:tarball`
+    # Built via `bazel run //src/patches/docling_jobkit/orchestrators/ray:tarball`
     # (rules_oci, base image pinned by digest in MODULE.bazel) -- run that
     # before `docker compose up`. Containerfile remains as a plain-docker
     # fallback that produces the same fix under a different tag.
@@ -139,9 +139,9 @@ services:
         condition: service_healthy
 
   facade:
-    # Built via `bazel run //facade:tarball` (rules_oci, same pattern as
+    # Built via `bazel run //src/facade:tarball` (rules_oci, same pattern as
     # ray-head/ray-worker/docling-serve). Containerfile fallback:
-    # `docker build -f facade/Containerfile -t docling-serve-ray-facade .`
+    # `docker build -f src/facade/Containerfile -t docling-serve-ray-facade .`
     image: docling-serve-ray-facade:latest
     environment:
       FACADE_DOCLING_SERVE_URL: "http://docling-serve:5001"
@@ -166,7 +166,7 @@ services:
         condition: service_healthy
 
   nginx:
-    # Built via `bazel run //nginx:tarball` (rules_oci, nginx.conf baked into
+    # Built via `bazel run //src/nginx:tarball` (rules_oci, nginx.conf baked into
     # the image -- same pattern as ray-head/ray-worker/docling-serve/facade).
     image: docling-serve-ray-nginx:latest
     ports:

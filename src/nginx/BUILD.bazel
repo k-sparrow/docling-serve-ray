@@ -3,7 +3,7 @@
 Layers nginx.conf onto the official `nginx:1.27-alpine` base via a real
 rules_oci `oci_image`, pinned to the base image digest in MODULE.bazel --
 same pattern as the patched docling-serve image at
-//patches/docling_jobkit/orchestrators/ray and the facade image at //facade.
+//src/patches/docling_jobkit/orchestrators/ray and the facade image at //src/facade.
 """
 
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
@@ -44,7 +44,7 @@ container_structure_test(
     image = ":image",
 )
 
-# bazel run //nginx:tarball
+# bazel run //src/nginx:tarball
 # loads the image into the local Docker daemon as:
 #   docling-serve-ray-nginx:bazel
 #   docling-serve-ray-nginx:latest
@@ -57,7 +57,7 @@ oci_load(
     ],
 )
 
-# bazel run //nginx:push
+# bazel run //src/nginx:push
 # Pushes to GHCR -- run in CI only (see .github/workflows/ci.yml's
 # push-images job), after tests pass, on push to main.
 oci_push(

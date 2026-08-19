@@ -48,7 +48,7 @@ python.toolchain(python_version = "3.12")
 use_repo(python, "python_3_12")
 
 # Single hub for every Python dependency in the repo -- facade's own runtime
-# deps (source: facade/requirements.in) and all test tooling (source:
+# deps (source: src/facade/requirements.in) and all test tooling (source:
 # requirements-test.in), resolved together into one lock file
 # (requirements_lock.txt) but declared as two separate .in files so it's
 # still clear which concern needs what. Matches Artemis's own convention
@@ -84,7 +84,7 @@ use_repo(oci, "docling-serve-cu128", "docling-serve-cu128_linux_amd64")
 # test suite (tests/integration, tests/e2e) patches and runs this image
 # instead of docling-serve-cu128 -- same one-line jobkit fix, same version,
 # just a different torch/onnxruntime backend underneath. See
-# patches/docling_jobkit/orchestrators/ray/BUILD.bazel's `:tarball.cpu`.
+# src/patches/docling_jobkit/orchestrators/ray/BUILD.bazel's `:tarball.cpu`.
 oci.pull(
     name = "docling-serve-cpu",
     digest = "sha256:51c18e0e0fec8a13ab858f03d5e9a140178d8d95962400553cb2644ad5ee84da",

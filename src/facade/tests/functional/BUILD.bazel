@@ -16,9 +16,9 @@ py_library(
         "fakes.py",
     ],
     imports = ["../../../"],
-    visibility = ["//facade/tests/functional:__subpackages__"],
+    visibility = ["//src/facade/tests/functional:__subpackages__"],
     deps = [
-        "//facade:facade_lib",
+        "//src/facade:facade_lib",
         requirement("httpx"),
         requirement("pytest"),
     ],
@@ -31,7 +31,7 @@ py_test(
     tags = ["unit"],
     deps = [
         ":conftest",
-        "//facade:facade_lib",
+        "//src/facade:facade_lib",
     ],
 )
 
@@ -42,7 +42,7 @@ py_test(
     tags = ["unit"],
     deps = [
         ":conftest",
-        "//facade:facade_lib",
+        "//src/facade:facade_lib",
         requirement("httpx"),
     ],
 )
@@ -54,7 +54,7 @@ py_test(
     tags = ["unit"],
     deps = [
         ":conftest",
-        "//facade:facade_lib",
+        "//src/facade:facade_lib",
     ],
 )
 
@@ -65,6 +65,6 @@ py_test(
     tags = ["unit"],
     deps = [
         ":conftest",
-        "//facade:facade_lib",
+        "//src/facade:facade_lib",
     ],
 )
