@@ -1,0 +1,21 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  # docling_serve is installed *editable* (PEP 660), so it lives under
+  # opt/app-root/src, not site-packages -- see BUILD.bazel's comment on
+  # _SERVE_APP_DIR for the full mechanism (confirmed empirically: Python's
+  # own import resolves here, a site-packages overlay is never imported).
+  - name: "patched app.py present at the real editable-install src path"
+    path: "/opt/app-root/src/docling_serve/app.py"
+    shouldExist: true
+
+  - name: "sibling modules in the editable src tree still present"
+    path: "/opt/app-root/src/docling_serve/settings.py"
+    shouldExist: true
+
+fileContentTests:
+  - name: "the QueueLimitExceededError -> 429 handler is actually applied"
+    path: "/opt/app-root/src/docling_serve/app.py"
+    expectedContents:
+      - "async def queue_limit_exceeded_error_handler\\("
+      - "status.HTTP_429_TOO_MANY_REQUESTS"

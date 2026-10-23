@@ -20,3 +20,10 @@ FROM ${BASE_IMAGE}
 
 COPY --chown=1001:0 src/patches/docling_jobkit/orchestrators/ray/models.py \
     /opt/app-root/lib64/python3.12/site-packages/docling_jobkit/orchestrators/ray/models.py
+
+# Second, independent patch: QueueLimitExceededError -> 429 handler. Lands at
+# the app source tree, NOT site-packages -- docling_serve is installed from
+# /opt/app-root/src, so a site-packages overlay would be silently ignored. See
+# src/patches/docling_serve/app.py and its BUILD.bazel for the full writeup.
+COPY --chown=1001:0 src/patches/docling_serve/app.py \
+    /opt/app-root/src/docling_serve/app.py

@@ -1,0 +1,78 @@
+"""Bazel/rules_oci build for the docling-serve app.py patch.
+
+Layers a full-file replacement of `docling_serve/app.py` on top of the
+official `ghcr.io/docling-project/docling-serve-cu128:v1.29.0` base, adding
+the missing QueueLimitExceededError -> 429 exception handler. See app.py's
+own comment on the patch for the full root-cause writeup (upstream issue
+docling-project/docling-serve#581, unmerged fix docling-project/docling-serve#583).
+
+Combined with the docling_jobkit/orchestrators/ray models.py patch into one
+final image by //src/patches/docling_jobkit/orchestrators/ray:image (its
+`tars` list references this package's :app.py.pkg directly) -- this
+package only produces the tar layer, not a standalone image.
+"""
+
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@pip//:requirements.bzl", "requirement")
+load("//tools/testing:pytest.bzl", py_test = "pytest_test")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# NOT the site-packages path (unlike the docling_jobkit models.py patch):
+# docling_serve is installed *editable* (PEP 660, via
+# __editable__.docling_serve-1.29.0.pth -> __editable___docling_serve_1_29_0_finder.py),
+# so Python's import resolves straight to this src path regardless of what's
+# overlaid at site-packages -- confirmed by
+# `python3 -c 'import docling_serve.app as m; print(m.__file__)'` printing
+# /opt/app-root/src/docling_serve/app.py inside the built image. A
+# site-packages overlay here builds byte-for-byte correct and just silently
+# never gets imported -- same failure class as the lib/lib64 symlink gotcha
+# the docling_jobkit patch's BUILD.bazel documents, just via a different
+# mechanism (editable-install finder, not a shadowed symlink).
+_SERVE_APP_DIR = "opt/app-root/src/docling_serve"
+
+exports_files(["app.py"])
+
+mtree_spec(
+    name = "app.py.spec",
+    srcs = ["app.py"],
+)
+
+mtree_mutate(
+    name = "app.py.mtree",
+    group = "0",
+    mtree = ":app.py.spec",
+    # Same ownership as the base image's own files -- uid 1001 (app-root
+    # non-root user), gid 0/root. Matches the docling_jobkit patch's owner.
+    owner = "1001",
+    package_dir = _SERVE_APP_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "app.py.pkg",
+    srcs = ["app.py"],
+    mtree = ":app.py.mtree",
+)
+
+container_structure_test(
+    name = "structure_test",
+    configs = ["tests/structural/structure_test.yaml"],
+    image = "//src/patches/docling_jobkit/orchestrators/ray:image",
+)
+
+py_test(
+    name = "test_patch_is_imported",
+    srcs = ["tests/functional/test_patch_is_imported.py"],
+    # Same reasoning as the docling_jobkit patch's own test_patch_is_imported --
+    # needs the host Docker socket and an already-loaded image.
+    tags = [
+        "integration",
+        "local",
+        "manual",
+    ],
+    deps = [
+        requirement("docker"),
+    ],
+)
