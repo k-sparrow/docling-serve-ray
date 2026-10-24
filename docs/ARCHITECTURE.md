@@ -257,8 +257,8 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
     (`ghcr.io/k-sparrow/docling-serve-ray-{patched,facade,nginx}`). The
     CI-only CPU-patched image variant is never pushed — it's test
     infrastructure, not a deployable artifact.
-  - `nightly-docker-tests.yml` — the same Docker-dependent suite again, on a
-    daily cron plus manual dispatch, as an environment-drift canary
+  - `nightly-docker-tests.yml` — the same Docker-dependent suite again, on an
+    every-other-day cron plus manual dispatch, as an environment-drift canary
     independent of code changes (intentionally redundant with `ci.yml`'s
     `test-docker` job).
 - **Requirements** — Docker Compose, an NVIDIA GPU with drivers + the NVIDIA

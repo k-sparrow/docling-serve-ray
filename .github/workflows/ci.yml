@@ -31,7 +31,7 @@ name: CI
 # output, and parallel gives faster overall feedback than serializing them
 # would.
 #
-# Also still runs on a nightly schedule (nightly-docker-tests.yml) as an
+# Also still runs on an every-other-day schedule (nightly-docker-tests.yml) as an
 # environment-drift canary independent of code changes -- intentionally
 # redundant with running here on every PR/push.
 #
