@@ -20,13 +20,14 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design write-up 
 - **`src/nginx/`** — `nginx.conf` baked into an image via Bazel, routing the three facade-owned paths there and everything else to `docling-serve` directly.
 - **`src/patches/docling_serve/app.py`** — the patched `docling-serve` image (base: official `docling-serve-cu128:v1.36.0`). Registers the missing `QueueLimitExceededError` → 429 exception handler; stock docling-serve lets a full queue surface as an unhandled 500 ([docling-serve#581](https://github.com/docling-project/docling-serve/issues/581), fix [#583](https://github.com/docling-project/docling-serve/pull/583) unmerged).
 - **Upstreamed:** this repo previously also patched a `docling-jobkit` bug — `SourceChunkConvertRequest.chunk` typed as the dynamically-parameterized generic `DocumentChunk[Any, Any]`, which Ray's cross-process Serve-replica (de)serialization cannot reconstruct (`ray.exceptions.RaySystemError: System error: 'type'`), breaking *every* S3-source batch conversion under the Ray engine. Fixed upstream in [docling-jobkit#263](https://github.com/docling-project/docling-jobkit/pull/263) (jobkit v3.8.1, first shipped in docling-serve v1.36.0), so the overlay is gone; the image's structure test still asserts the base carries the fix. A second, related finding — Redis durably persisting document bytes and connector credentials in plaintext — is drafted but not yet fixed; see [`upstream-issue-draft.md`](upstream-issue-draft.md).
-- **`MODULE.bazel`** plus each component's own `BUILD.bazel` — reproducible Bazel/rules_oci builds for all three images, pinned to their upstream bases by digest. Each image also has its own `Containerfile` (`src/patches/docling_serve/` and `src/facade/`) as a plain-`docker build` fallback for anyone without Bazel set up.
+- **`MODULE.bazel`** plus each component's own `BUILD.bazel` — reproducible Bazel/rules_oci builds for all four images, pinned to their upstream bases by digest. Each image also has its own `Containerfile` (`src/patches/docling_serve/`, `src/facade/`, `src/orchestration/`) as a plain-`docker build` fallback for anyone without Bazel set up.
+- **`src/orchestration/`** — durable conversion with Temporal: one `ConvertDocumentWorkflow` per document already in S3, submitted serially to docling-serve, surviving worker/server restarts without re-converting. Its own `docker-compose.yml` (Temporal + Postgres + UI + worker). See [Durable conversion with Temporal](#durable-conversion-with-temporal).
 - **`scripts/send_pdf.py`** — exercises the S3-source batch path end-to-end: uploads every PDF in a local directory to MinIO, submits a `/v1/convert/source/batch` job through nginx, polls until it terminates, and lists the converted output objects.
 
 ## Quickstart
 
 ```bash
-# Build and load all three images (patched docling-serve, facade, nginx)
+# Build and load all four images (patched docling-serve, facade, nginx, orchestration worker)
 bazel run //:load.all
 
 docker compose up
@@ -40,7 +41,7 @@ python scripts/send_pdf.py
 
 Or hit the facade's own multipart endpoint directly (through nginx, at `http://localhost:5001`) — `POST /v1/convert/file/async` with a `files` field, same contract as native docling-serve, no client-side changes needed.
 
-Pre-built images are also published to GHCR on every merge to `main`: `ghcr.io/k-sparrow/docling-serve-ray-{patched,facade,nginx}:latest`.
+Pre-built images are also published to GHCR on every merge to `main`: `ghcr.io/k-sparrow/docling-serve-ray-{patched,facade,nginx,orchestration}:latest`.
 
 **Upgrading an existing checkout:** MinIO now runs from Chainguard's image as uid 65532 (MinIO's own images are no longer publicly pullable). A `minio-data` volume created by the old root-run image is root-owned, so the new server can't write to it. Fix it once, with the stack down:
 
@@ -51,6 +52,21 @@ docker run --rm --user 0 --entrypoint sh -v docling-serve-ray_minio-data:/data \
 ```
 
 Fresh volumes (new clones, CI) need nothing.
+
+## Durable conversion with Temporal
+
+For documents already in S3: one workflow per object, which survives worker and Temporal restarts, resumes polling the same docling task instead of re-converting, absorbs docling's 429 backpressure as retries, and rejects a duplicate dispatch while a document is still in flight.
+
+```bash
+# Main stack first -- the Temporal worker joins its network.
+docker compose up -d
+docker compose -f src/orchestration/docker-compose.yml up -d
+
+# Dispatch every object under a prefix (json is always produced, alongside --to-formats).
+bazel run //src/orchestration:start -- convert --prefix incoming/ --wait
+```
+
+Outputs land under `docling-output/temporal/{bucket}/{key}/convert/`. The Temporal UI is at `http://localhost:8080`. If another local Temporal already holds `7233`/`8080`, set `TEMPORAL_HOST_PORT` / `TEMPORAL_UI_HOST_PORT` on the compose command and point the starter at it with `ORCH_TEMPORAL_ADDRESS=localhost:<port>`. Run **one** worker replica: submits are serialized per worker process. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#request-flow-the-temporal-path) for the failure semantics.
 
 ## Testing
 
@@ -78,7 +94,7 @@ bazel build --aspects=//tools/lint:linters.bzl%ruff --output_groups=rules_lint_h
 
 ## CI/CD
 
-- **`.github/workflows/ci.yml`** — on every PR and push to `main`: `lint` (the ruff aspect above) runs first and gates `test` (`bazel test //...`) and `test-docker` (the Docker-dependent suite, CPU-only), which then run in parallel with each other. On push to `main`, once all three pass, also pushes the three production images to GHCR.
+- **`.github/workflows/ci.yml`** — on every PR and push to `main`: `lint` (the ruff aspect above) runs first and gates `test` (`bazel test //...`) and `test-docker` (the Docker-dependent suite, CPU-only), which then run in parallel with each other. On push to `main`, once all three pass, also pushes the four production images to GHCR.
 - **`.github/workflows/nightly-docker-tests.yml`** — the Docker-dependent suite again, on an every-other-day cron plus manual dispatch, as an environment-drift canary independent of code changes.
 
 ## Requirements

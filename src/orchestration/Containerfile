@@ -1,0 +1,15 @@
+# Non-Bazel fallback for local iteration. The primary, reproducible build is
+# this package's Bazel/rules_oci target (see BUILD.bazel), mirroring the
+# pattern used for the facade image at //src/facade. Build from the repo root:
+# `docker build -f src/orchestration/Containerfile -t docling-serve-ray-orchestration .`
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY src/orchestration/requirements.in /app/requirements.in
+RUN pip install --no-cache-dir -r requirements.in
+
+COPY src/orchestration /app/orchestration
+
+CMD ["python", "-m", "orchestration.worker"]

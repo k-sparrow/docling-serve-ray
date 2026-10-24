@@ -1,0 +1,52 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+load("//tools/testing:pytest.bzl", py_test = "pytest_test")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "conftest.py",
+        "fakes.py",
+    ],
+    imports = ["../../../"],
+    visibility = ["//src/orchestration/tests/functional:__subpackages__"],
+    deps = [
+        "//src/orchestration:orchestration_lib",
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)
+
+py_test(
+    name = "test_activities",
+    srcs = ["test_activities.py"],
+    imports = ["../../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//src/orchestration:orchestration_lib",
+        requirement("httpx"),
+    ],
+)
+
+py_test(
+    name = "test_workflows",
+    srcs = ["test_workflows.py"],
+    # The time-skipping test server MODULE.bazel pins by sha256 -- passed in
+    # by path so the SDK never downloads one at test time (see conftest.py).
+    data = ["@temporal_test_server//:temporal-test-server"],
+    env = {"TEMPORAL_TEST_SERVER": "$(rootpath @temporal_test_server//:temporal-test-server)"},
+    imports = ["../../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//src/orchestration:orchestration_lib",
+    ],
+)

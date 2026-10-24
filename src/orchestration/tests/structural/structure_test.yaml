@@ -1,0 +1,23 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "worker entrypoint binary exists"
+    path: "/src/orchestration/worker"
+    shouldExist: true
+
+  - name: "workflow source is baked in"
+    path: "/src/orchestration/worker.runfiles/_main/src/orchestration/workflows.py"
+    shouldExist: true
+
+  - name: "temporalio dependency closure is baked in"
+    path: "/src/orchestration/worker.runfiles/rules_python++pip+pip_312_temporalio/site-packages/temporalio/__init__.py"
+    shouldExist: true
+
+  # The SDK's Rust core ships as a compiled extension inside the wheel --
+  # without it the worker can't even connect to Temporal.
+  - name: "temporalio native bridge is baked in"
+    path: "/src/orchestration/worker.runfiles/rules_python++pip+pip_312_temporalio/site-packages/temporalio/bridge/temporal_sdk_bridge.abi3.so"
+    shouldExist: true
+
+metadataTest:
+  entrypoint: ["/src/orchestration/worker"]

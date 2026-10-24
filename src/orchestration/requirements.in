@@ -1,0 +1,4 @@
+temporalio
+httpx
+boto3
+pydantic-settings

@@ -34,9 +34,9 @@ buildifier(
 )
 
 # bazel run //:load.all
-# Builds and loads all three custom images into the local Docker daemon in
+# Builds and loads all four custom images into the local Docker daemon in
 # one command -- docling-serve-ray-patched, docling-serve-ray-facade,
-# docling-serve-ray-nginx. Lists the actual runnable oci_load tarball targets
+# docling-serve-ray-nginx, docling-serve-ray-orchestration. Lists the actual runnable oci_load tarball targets
 # directly rather than composing this from per-image `command()` wrappers or
 # nested multirun targets -- mirrors Artemis's own tools/oci/images/BUILD.bazel
 # `load.all`, whose comment there documents a real gotcha: a nested multirun
@@ -47,16 +47,17 @@ multirun(
         "//src/patches/docling_serve:tarball",
         "//src/facade:tarball",
         "//src/nginx:tarball",
+        "//src/orchestration:tarball",
     ],
 )
 
 # bazel test //:test.docker
-# Bundles the three test targets that need a real Docker daemon (the
+# Bundles the test targets that need a real Docker daemon (the
 # sandbox `bazel test //...` normally runs under doesn't expose the host's
 # Docker socket, and these also depend on images already being `docker
 # load`-ed onto it) -- tagged `manual` for exactly that reason, so a plain
 # `bazel test //...` sweep skips them. Naming this test_suite explicitly
-# bypasses that, the same way naming any one of the three directly already
+# bypasses that, the same way naming any one of them directly already
 # does -- `manual` only blocks *wildcard* expansion. Uses Bazel's native
 # test_suite rather than multirun: multirun is the right tool for running
 # plain executables (see load.all above), but bundling *tests* already has
@@ -67,7 +68,7 @@ multirun(
 # test_suite can only bundle test targets, not the oci_load commands that
 # put those images on the Docker daemon in the first place.
 # bazel run //:push.all
-# Pushes all three custom images to GHCR in one command -- CI-only (see
+# Pushes all four custom images to GHCR in one command -- CI-only (see
 # .github/workflows/ci.yml's push-images job), same flat leaf-target list
 # convention as load.all (not composed from per-image wrappers or nested
 # multirun targets, for the same reason documented there).
@@ -77,6 +78,7 @@ multirun(
         "//src/patches/docling_serve:push",
         "//src/facade:push",
         "//src/nginx:push",
+        "//src/orchestration:push",
     ],
 )
 
@@ -84,7 +86,7 @@ test_suite(
     name = "test.docker",
     # Without this, the test_suite itself (unlike its members) has no
     # manual tag of its own, and `bazel test //...` was empirically
-    # confirmed to sweep it in anyway -- pulling in all three
+    # confirmed to sweep it in anyway -- pulling in every
     # Docker-dependent tests on every plain `//...` sweep, exactly the
     # slow/non-hermetic default this whole `manual` convention exists to
     # avoid. Tagging the suite itself `manual` restores the fast default
@@ -96,5 +98,6 @@ test_suite(
         "//src/patches/docling_serve:test_patch_is_imported",
         "//tests/e2e:test_stack",
         "//tests/integration:test_facade_docling_serve",
+        "//tests/temporal:test_temporal_orchestration",
     ],
 )

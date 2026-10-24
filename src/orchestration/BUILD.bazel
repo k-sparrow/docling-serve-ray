@@ -1,0 +1,102 @@
+"""Bazel/rules_oci build for the Temporal orchestration worker image.
+
+Same packaging pattern as //src/facade: the worker's py_binary (its own
+runfiles tree, including the pinned pip dependency closure from @pip) as a
+tar layer onto the official python:3.12-slim base. The starter CLI is a
+second py_binary run on the host (`bazel run //src/orchestration:start --
+convert --prefix ...`), not baked into the image. See ./Containerfile for the
+plain `docker build` equivalent.
+"""
+
+load("@aspect_bazel_lib//lib:tar.bzl", "tar")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Used as test data by //tests/temporal.
+exports_files(["docker-compose.yml"])
+
+py_library(
+    name = "orchestration_lib",
+    srcs = [
+        "__init__.py",
+        "activities.py",
+        "config.py",
+        "docling_client.py",
+        "models.py",
+        "workflows.py",
+    ],
+    imports = ["../"],
+    deps = [
+        requirement("httpx"),
+        requirement("pydantic-settings"),
+        requirement("temporalio"),
+    ],
+)
+
+py_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../"],
+    main = "worker.py",
+    deps = [
+        ":orchestration_lib",
+        requirement("boto3"),
+    ],
+)
+
+py_binary(
+    name = "start",
+    srcs = ["starter.py"],
+    imports = ["../"],
+    main = "starter.py",
+    deps = [
+        ":orchestration_lib",
+        requirement("boto3"),
+    ],
+)
+
+tar(
+    name = "app_layer",
+    srcs = [":worker"],
+    include_runfiles = True,
+)
+
+oci_image(
+    name = "image",
+    base = "@python_3_12_slim",
+    entrypoint = ["/src/orchestration/worker"],
+    tars = [":app_layer"],
+)
+
+container_structure_test(
+    name = "structure_test",
+    configs = ["//src/orchestration/tests/structural:structure_test.yaml"],
+    image = ":image",
+)
+
+# bazel run //src/orchestration:tarball
+# loads the worker image into the local Docker daemon as:
+#   docling-serve-ray-orchestration:bazel
+#   docling-serve-ray-orchestration:latest
+oci_load(
+    name = "tarball",
+    image = ":image",
+    repo_tags = [
+        "docling-serve-ray-orchestration:bazel",
+        "docling-serve-ray-orchestration:latest",
+    ],
+)
+
+# bazel run //src/orchestration:push
+# Pushes to GHCR -- run in CI only (see .github/workflows/ci.yml's
+# push-images job), after tests pass, on push to main.
+oci_push(
+    name = "push",
+    image = ":image",
+    remote_tags = ["latest"],
+    repository = "ghcr.io/k-sparrow/docling-serve-ray-orchestration",
+)

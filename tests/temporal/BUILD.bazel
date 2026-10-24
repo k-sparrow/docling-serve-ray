@@ -1,0 +1,48 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+load("//tools/testing:pytest.bzl", py_test = "pytest_test")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    visibility = ["//tests/temporal:__subpackages__"],
+    deps = [
+        requirement("boto3"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("temporalio"),
+    ],
+)
+
+py_test(
+    name = "test_temporal_orchestration",
+    srcs = ["test_temporal_orchestration.py"],
+    data = [
+        "//:docker-compose.yml",
+        "//src/orchestration:docker-compose.yml",
+        "//tests/ci:docker-compose.cpu.yml",
+        "//tests/integration/fixtures:sample.pdf",
+    ],
+    # Same constraints as //tests/integration:test_facade_docling_serve:
+    # shells out to the real `docker compose` (host Docker socket, real file
+    # paths -- no sandbox), loaded images required, and `exclusive` because
+    # the main stack publishes MinIO on the fixed host port 9000.
+    tags = [
+        "exclusive",
+        "integration",
+        "local",
+        "manual",
+    ],
+    # So //:test.docker can depend on it.
+    visibility = ["//:__pkg__"],
+    deps = [
+        ":conftest",
+        "//src/orchestration:orchestration_lib",
+    ],
+)

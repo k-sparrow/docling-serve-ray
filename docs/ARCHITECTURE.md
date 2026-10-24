@@ -110,6 +110,19 @@ flowchart TB
         minio[("MinIO / S3<br/>docling-input, docling-output")]
     end
 
+    subgraph orch[Durable orchestration: src/orchestration, separate compose]
+        starter["starter CLI"]
+        temporal["Temporal server :7233<br/>+ UI :8080"]
+        pg[("Postgres<br/>workflow state")]
+        worker["orchestration worker<br/>1 replica"]
+    end
+
+    starter -- "start ConvertDocumentWorkflow<br/>per S3 object" --> temporal
+    temporal --- pg
+    worker -- "poll task queues" --> temporal
+    worker -- "convert/source/batch (serial),<br/>status/poll, result" --> docling
+    worker -- "list outputs" --> minio
+
     client --> nginx
     nginx -- "the two upload routes<br/>plus the result route" --> facade
     nginx -- "everything else, incl.<br/>convert source batch" --> docling
@@ -149,7 +162,17 @@ flowchart TB
   `facade:task:*`, `SET ... EX <ttl>`, not `RPUSH`).
 - **MinIO / S3** — two buckets, `docling-input` and `docling-output`. Real
   deployments would point `FACADE_S3_*` / the Ray converter's AWS config at
-  any S3-compatible endpoint; MinIO here is purely the local/dev stand-in.
+  any S3-compatible endpoint; MinIO here is purely the local/dev stand-in
+  (Chainguard's from-source image — MinIO's own images are no longer
+  publicly pullable).
+- **Temporal orchestration** (`src/orchestration/`, its own
+  `docker-compose.yml`) — a second, independent entrypoint into the same
+  backend, for documents *already in S3*. It talks to raw docling-serve
+  directly, not through nginx/the facade: its inputs are S3 coordinates,
+  which `/v1/convert/source/batch` already handles without any document
+  bytes in Redis, so the claim-check step has nothing to do. Temporal server
+  (Postgres-backed) + UI + one worker process; the worker joins the main
+  stack's network by name. See [the Temporal path](#request-flow-the-temporal-path).
 
 ## Request flow: the claim-check path
 
@@ -195,6 +218,71 @@ Two details worth calling out:
   `_wait_task_complete`) before falling into the same result-reconstruction
   path as the async+poll case.
 
+## Request flow: the Temporal path
+
+One `ConvertDocumentWorkflow` per S3 object, started by the CLI
+(`bazel run //src/orchestration:start -- convert --prefix incoming/`):
+
+```mermaid
+sequenceDiagram
+    participant CLI as starter CLI
+    participant T as Temporal
+    participant WS as worker: docling-submit queue (1 slot)
+    participant WM as worker: docling queue
+    participant D as docling-serve
+    participant S3 as MinIO
+
+    CLI->>T: start workflow id convert:{bucket}/{key}
+    Note over CLI,T: already running? rejected, not converted twice
+    T->>WS: submit_conversion
+    WS->>D: POST convert/source/batch (S3 source, S3 target)
+    alt queue full
+        D-->>WS: 429
+        Note over T,WS: retried with backoff, slot freed between attempts
+    end
+    D-->>WS: task_id
+    T->>WM: wait_for_task(task_id)
+    loop until terminal
+        WM->>D: GET status/poll?wait=30
+        WM-->>T: heartbeat
+    end
+    Note over T,WM: worker dies: heartbeat timeout, retried on a live worker,<br/>polling the SAME task_id
+    alt 404 (docling lost the task)
+        WM-->>T: TaskLost, workflow resubmits (max 4 submissions)
+    end
+    WM->>D: GET result (per-document counts)
+    T->>WM: collect_outputs
+    WM->>S3: list temporal/{bucket}/{key}/convert/ recursively
+    WM-->>T: {json, md, ...} keys
+```
+
+Properties worth knowing:
+
+- **Serial admission.** Submits run on their own task queue, served with
+  `max_concurrent_activities=1`, so docling-serve sees one admission at a
+  time. Its per-tenant queue counter isn't updated atomically, so concurrent
+  submits overshoot `MAX_QUEUED_TASKS`; serial submits keep it exact
+  (measured: a 20-document burst peaked at exactly 8 queued + 2 active, with
+  every 429 absorbed as a retried submit). **Run exactly one worker
+  replica**: the limit is per process.
+- **Resume, don't resubmit.** The wait step's only input is the docling
+  task id, so a retry after a crash polls the same task. Verified by
+  SIGKILLing the worker mid-poll (`tests/temporal/`).
+- **At-least-once submits.** docling-serve has no idempotency key: a crash
+  between the POST landing and the activity completing means one duplicate
+  conversion into the same per-document prefix (costs GPU time, corrupts
+  nothing). TaskLost resubmits likewise leave the original conversion running
+  on Ray until it finishes.
+- **`success` isn't the verdict.** docling reports `task_status=success`
+  even when every document in the task failed; the workflow checks the
+  result's per-document counts and that a `json` output exists.
+- **Always emits DoclingDocument JSON**, whatever formats are requested —
+  it's what a chained chunking step re-ingests (`from_formats=["json_docling"]`)
+  without re-running the conversion pipeline.
+- **No secrets in workflow history.** S3 credentials and endpoints come from
+  the worker's `ORCH_*` env; workflow inputs are only bucket, key and
+  conversion options.
+
 ## Testing
 
 ```bash
@@ -225,6 +313,11 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
   deliberately excluded — that's `tests/e2e/`'s job, which additionally
   proves the routing itself (hitting everything through nginx, the only path
   a real client would use).
+- **Orchestration**: `src/orchestration/tests/functional/` covers activity
+  failure classification (mocked docling-serve) and workflow logic in
+  Temporal's time-skipping test server — pinned by sha256 in `MODULE.bazel`,
+  never downloaded at test time. `tests/temporal/` runs both real stacks
+  (backend + Temporal) and includes the worker-SIGKILL resume test.
 - **Formatting and linting** — ruff (Python), buildifier (Starlark), yamlfmt
   (YAML), and a ruff lint aspect, mirroring Artemis's own convention:
 
@@ -238,10 +331,17 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
 
 ## Deployment
 
-- **Bazel/rules_oci** — reproducible builds for all three custom images
-  (patched `docling-serve`, `facade`, `nginx`), each pinned to its upstream
-  base by digest in `MODULE.bazel`. `bazel run //:load.all` builds and loads
-  all three into the local Docker daemon in one command.
+- **Bazel/rules_oci** — reproducible builds for all four custom images
+  (patched `docling-serve`, `facade`, `nginx`, the orchestration worker),
+  each pinned to its upstream base by digest in `MODULE.bazel`.
+  `bazel run //:load.all` builds and loads all four into the local Docker
+  daemon in one command.
+- **Temporal stack** — `docker compose -f src/orchestration/docker-compose.yml up -d`,
+  after the main stack (the worker joins its network). Official
+  `temporalio/{server,admin-tools,ui}` + `postgres` images pinned by digest;
+  schema setup and namespace creation are idempotent one-shots. Host ports
+  bind to localhost and are overridable (`TEMPORAL_HOST_PORT`,
+  `TEMPORAL_UI_HOST_PORT`) for machines already running another Temporal.
 - **`Containerfile` fallbacks** — each image also has a plain
   `docker build`-able `Containerfile` next to its own `BUILD.bazel`
   (`src/patches/docling_serve/Containerfile`,
@@ -257,8 +357,8 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
     above) runs first and gates `test` (`bazel test //...`) and
     `test-docker` (the Docker-dependent suite, CPU-only), which then run in
     parallel with each other. On push to `main`, once all three pass, also
-    pushes the three production images to GHCR as `:latest`
-    (`ghcr.io/k-sparrow/docling-serve-ray-{patched,facade,nginx}`). The
+    pushes the four production images to GHCR as `:latest`
+    (`ghcr.io/k-sparrow/docling-serve-ray-{patched,facade,nginx,orchestration}`). The
     CI-only CPU-patched image variant is never pushed — it's test
     infrastructure, not a deployable artifact.
   - `nightly-docker-tests.yml` — the same Docker-dependent suite again, on an

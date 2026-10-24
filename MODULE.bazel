@@ -47,11 +47,11 @@ python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(python_version = "3.12")
 use_repo(python, "python_3_12")
 
-# Single hub for every Python dependency in the repo -- facade's own runtime
-# deps (source: src/facade/requirements.in) and all test tooling (source:
-# requirements-test.in), resolved together into one lock file
-# (requirements_lock.txt) but declared as two separate .in files so it's
-# still clear which concern needs what. Matches Artemis's own convention
+# Single hub for every Python dependency in the repo -- each component's own
+# runtime deps (src/facade/requirements.in, src/orchestration/requirements.in)
+# and all test tooling (requirements-test.in), resolved together into one
+# lock file (requirements_lock.txt) but declared as separate .in files so
+# it's still clear which concern needs what. Matches Artemis's own convention
 # (one `@pip` hub covering both src and tests) rather than per-package
 # hubs -- Bazel's dependency-graph reachability already keeps unrelated
 # packages out of the facade's OCI image regardless of what's in the shared
@@ -110,3 +110,21 @@ oci.pull(
     tag = "1.27-alpine",
 )
 use_repo(oci, "nginx_alpine", "nginx_alpine_linux_amd64")
+
+# ------------------ TEST-ONLY BINARIES --------------------------------------
+# Temporal's time-skipping test server, for //src/orchestration's workflow
+# tests. temporalio's WorkflowEnvironment.start_time_skipping() would
+# otherwise download one at test time (whatever version its CDN redirect
+# resolves to that day); pinned here by sha256 instead and handed to the SDK
+# by path (test_server_existing_path). Released as part of temporalio/sdk-java.
+# The archive ships the binary as mode 644 -- the test fixture copies it and
+# sets the exec bit itself.
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "temporal_test_server",
+    build_file_content = 'exports_files(["temporal-test-server"])',
+    sha256 = "524465a96274831e004326f6e2f2a5f3ef9aaed72c2069cf16c1d64b8b1ec3ca",
+    strip_prefix = "temporal-test-server_1.40.0_linux_amd64",
+    urls = ["https://github.com/temporalio/sdk-java/releases/download/v1.40.0/temporal-test-server_1.40.0_linux_amd64.tar.gz"],
+)
