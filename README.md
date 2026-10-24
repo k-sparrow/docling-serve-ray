@@ -41,6 +41,16 @@ Or hit the facade's own multipart endpoint directly (through nginx, at `http://l
 
 Pre-built images are also published to GHCR on every merge to `main`: `ghcr.io/k-sparrow/docling-serve-ray-{patched,facade,nginx}:latest`.
 
+**Upgrading an existing checkout:** MinIO now runs from Chainguard's image as uid 65532 (MinIO's own images are no longer publicly pullable). A `minio-data` volume created by the old root-run image is root-owned, so the new server can't write to it. Fix it once, with the stack down:
+
+```bash
+docker run --rm --user 0 --entrypoint sh -v docling-serve-ray_minio-data:/data \
+  cgr.dev/chainguard/minio@sha256:73297936408b731668ca0e835ac9add1a35cb6026a125c2f0cd476d9ef48222c \
+  -c 'chown -R 65532:65532 /data'
+```
+
+Fresh volumes (new clones, CI) need nothing.
+
 ## Testing
 
 ```bash

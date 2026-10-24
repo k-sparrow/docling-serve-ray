@@ -1,23 +1,36 @@
 services:
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # Chainguard's from-source MinIO build, pinned by digest. MinIO's own
+    # images stopped being publicly pullable around 2026-09-25 (quay.io/minio/*
+    # now 401s anonymous pulls, Docker Hub's minio/* repos no longer exist),
+    # which broke every Docker-dependent CI run. Chainguard's free tier only
+    # publishes :latest, so this digest may eventually stop resolving and need
+    # a bump. Runs as uid 65532, not root -- see README for the one-time
+    # chown an existing root-owned minio-data volume needs.
+    image: cgr.dev/chainguard/minio@sha256:73297936408b731668ca0e835ac9add1a35cb6026a125c2f0cd476d9ef48222c
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
+      # For the healthcheck below -- mc reads alias credentials from env.
+      MC_HOST_local: http://minioadmin:minioadmin123@localhost:9000
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      # No curl in the Chainguard image; its bundled mc does the readiness
+      # probe instead.
+      test: ["CMD", "mc", "ready", "local"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   minio-init:
-    image: quay.io/minio/mc:latest
+    # Same image as `minio` -- it bundles mc, so no separate client image (and
+    # no second registry dependency) is needed just to create two buckets.
+    image: cgr.dev/chainguard/minio@sha256:73297936408b731668ca0e835ac9add1a35cb6026a125c2f0cd476d9ef48222c
     depends_on:
       minio:
         condition: service_healthy
