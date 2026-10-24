@@ -79,7 +79,7 @@ bazel build --aspects=//tools/lint:linters.bzl%ruff --output_groups=rules_lint_h
 ## CI/CD
 
 - **`.github/workflows/ci.yml`** — on every PR and push to `main`: `lint` (the ruff aspect above) runs first and gates `test` (`bazel test //...`) and `test-docker` (the Docker-dependent suite, CPU-only), which then run in parallel with each other. On push to `main`, once all three pass, also pushes the three production images to GHCR.
-- **`.github/workflows/nightly-docker-tests.yml`** — the Docker-dependent suite again, on a daily cron plus manual dispatch, as an environment-drift canary independent of code changes.
+- **`.github/workflows/nightly-docker-tests.yml`** — the Docker-dependent suite again, on an every-other-day cron plus manual dispatch, as an environment-drift canary independent of code changes.
 
 ## Requirements
 

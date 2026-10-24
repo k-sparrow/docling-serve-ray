@@ -32,8 +32,11 @@ name: Nightly Docker tests
 
 on:
   schedule:
-    # 03:00 UTC daily -- arbitrary, adjust to taste.
-    - cron: "0 3 * * *"
+    # Every other day at 00:00 UTC -- 02:00 Israel time in winter (UTC+2),
+    # 03:00 in summer (UTC+3); GitHub cron is UTC-only and can't follow
+    # DST. `*/2` on day-of-month restarts each month (odd dates), so a
+    # 31-day month runs on both the 31st and the 1st.
+    - cron: "0 0 */2 * *"
   workflow_dispatch:
 
 jobs:
