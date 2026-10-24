@@ -3,7 +3,7 @@
 Packages the facade's py_binary (its own runfiles tree, including the pinned
 pip dependency closure from @pip) as a tar layer onto the official
 python:3.12-slim base, mirroring the pattern used for the patched
-docling-serve image at //src/patches/docling_jobkit/orchestrators/ray. See
+docling-serve image at //src/patches/docling_serve. See
 facade/Containerfile for the plain `docker build` equivalent (non-Bazel
 fallback, useful for a faster local iteration loop).
 """

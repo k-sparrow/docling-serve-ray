@@ -44,7 +44,7 @@ buildifier(
 multirun(
     name = "load.all",
     commands = [
-        "//src/patches/docling_jobkit/orchestrators/ray:tarball",
+        "//src/patches/docling_serve:tarball",
         "//src/facade:tarball",
         "//src/nginx:tarball",
     ],
@@ -74,7 +74,7 @@ multirun(
 multirun(
     name = "push.all",
     commands = [
-        "//src/patches/docling_jobkit/orchestrators/ray:push",
+        "//src/patches/docling_serve:push",
         "//src/facade:push",
         "//src/nginx:push",
     ],
@@ -93,7 +93,7 @@ test_suite(
     # has.
     tags = ["manual"],
     tests = [
-        "//src/patches/docling_jobkit/orchestrators/ray:test_patch_is_imported",
+        "//src/patches/docling_serve:test_patch_is_imported",
         "//tests/e2e:test_stack",
         "//tests/integration:test_facade_docling_serve",
     ],

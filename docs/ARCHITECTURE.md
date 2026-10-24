@@ -30,13 +30,17 @@ converter ever runs. This isn't specific to `Any`; it reproduces with any
 subscripted Pydantic generic crossing that boundary, so it would silently
 resurface for any future connector (Azure Blob, GCS, ...) typed the same way.
 
-**Fix**: `src/patches/docling_jobkit/orchestrators/ray/models.py` re-types the
-field as the bare `DocumentChunk` — same runtime validation (the class already
-has `arbitrary_types_allowed=True`), just without the coercion into an
-unpicklable dynamic class. Layered onto the official base image via
-Bazel/rules_oci (see [Deployment](#deployment)). Verified end-to-end against a
-live MinIO + Ray cluster: 5/5 documents failed before the patch, 5/5 succeeded
-after.
+**Fix**: re-type the field as the bare `DocumentChunk` — same runtime
+validation (the class already has `arbitrary_types_allowed=True`), just
+without the coercion into an unpicklable dynamic class. Verified end-to-end
+against a live MinIO + Ray cluster: 5/5 documents failed before the patch, 5/5
+succeeded after. This repo originally layered that one-line change onto the
+official base image itself; it has since landed upstream as
+[docling-jobkit#263](https://github.com/docling-project/docling-jobkit/pull/263)
+(jobkit v3.8.1, first shipped in docling-serve v1.36.0), so the overlay was
+dropped when the base moved to v1.36.0. The patched image's structure test
+still asserts the base carries the fix, so a future base bump can't silently
+regress it.
 
 ### Bug 2 — multipart uploads durably persist full document bytes (and connector credentials) into Redis
 
@@ -240,7 +244,7 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
   all three into the local Docker daemon in one command.
 - **`Containerfile` fallbacks** — each image also has a plain
   `docker build`-able `Containerfile` next to its own `BUILD.bazel`
-  (`src/patches/docling_jobkit/orchestrators/ray/Containerfile`,
+  (`src/patches/docling_serve/Containerfile`,
   `src/facade/Containerfile`), for anyone iterating without Bazel set up.
 - **`docker compose up`** — brings up the full stack against the locally
   loaded/built images: MinIO, Redis, ray-head/ray-worker, `docling-serve`,

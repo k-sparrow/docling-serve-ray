@@ -1,0 +1,19 @@
+# Non-Bazel fallback for local iteration. The primary, reproducible build is
+# this package's Bazel/rules_oci target (see BUILD.bazel's `:tarball`),
+# mirroring the pattern used for the facade image at //src/facade. Build from
+# the repo root: `docker build -f src/patches/docling_serve/Containerfile -t docling-serve-ray-patched:v1.36.0 .`
+#
+# Patched docling-serve image: registers the missing QueueLimitExceededError
+# -> 429 exception handler (stock docling-serve lets it propagate as an
+# unhandled 500). See src/patches/docling_serve/app.py for the full writeup
+# (upstream issue docling-project/docling-serve#581, unmerged fix #583).
+#
+# Lands at the app source tree, NOT site-packages -- docling_serve is
+# installed editable from /opt/app-root/src, so a site-packages overlay would
+# be silently ignored. See BUILD.bazel's comment on _SERVE_APP_DIR.
+
+ARG BASE_IMAGE=ghcr.io/docling-project/docling-serve-cu128:v1.36.0
+FROM ${BASE_IMAGE}
+
+COPY --chown=1001:0 src/patches/docling_serve/app.py \
+    /opt/app-root/src/docling_serve/app.py
