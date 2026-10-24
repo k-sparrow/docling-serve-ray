@@ -98,7 +98,7 @@ jobs:
 
       - name: Load images (CPU-patched docling-serve, facade, nginx)
         run: |
-          bazel run //src/patches/docling_jobkit/orchestrators/ray:tarball.cpu
+          bazel run //src/patches/docling_serve:tarball.cpu
           bazel run //src/facade:tarball
           bazel run //src/nginx:tarball
 

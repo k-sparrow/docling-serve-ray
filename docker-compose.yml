@@ -53,11 +53,11 @@ services:
       retries: 10
 
   ray-head:
-    # Built via `bazel run //src/patches/docling_jobkit/orchestrators/ray:tarball`
+    # Built via `bazel run //src/patches/docling_serve:tarball`
     # (rules_oci, base image pinned by digest in MODULE.bazel) -- run that
     # before `docker compose up`. Containerfile remains as a plain-docker
     # fallback that produces the same fix under a different tag.
-    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
+    image: docling-serve-ray-patched:v1.36.0-bazel
     command: >
       ray start --head --port=6379 --dashboard-host=0.0.0.0
       --num-cpus=0 --block
@@ -81,7 +81,7 @@ services:
         condition: service_healthy
 
   ray-worker:
-    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
+    image: docling-serve-ray-patched:v1.36.0-bazel
     command: >
       ray start --address=ray-head:6379 --num-cpus=4 --block
     shm_size: "8gb"
@@ -105,7 +105,7 @@ services:
         condition: service_healthy
 
   docling-serve:
-    image: docling-serve-ray-patched:v1.29.0-jobkit-fix-bazel
+    image: docling-serve-ray-patched:v1.36.0-bazel
     # No published host port -- nginx is the public entrypoint now (see the
     # `nginx` service below). Reach this directly only via the docker network.
     environment:
@@ -152,7 +152,7 @@ services:
       # src/patches/docling_serve/app.py actually reachable -- both settings
       # default off/None, so without them that patch is inert.
       # NOTE the var name is MAX_QUEUED_TASKS, not DEFAULT_MAX_QUEUED_TASKS;
-      # the wrong name is silently swallowed (extra="ignore") and the limit
+      # the wrong name is silently accepted (extra="allow") and the limit
       # then never enforces. Verified live that this name binds.
       # Depth sized against THIS box, not Artemis's 50: 2 concurrent slots
       # (MAX_CONCURRENT_TASKS) x ~6h worst-case heavy PDF means a depth of 8

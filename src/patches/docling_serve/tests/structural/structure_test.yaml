@@ -19,3 +19,15 @@ fileContentTests:
     expectedContents:
       - "async def queue_limit_exceeded_error_handler\\("
       - "status.HTTP_429_TOO_MANY_REQUESTS"
+
+  # Regression guard, not a patch check: the DocumentChunk[Any, Any] pickling
+  # fix used to be overlaid from this repo, and now ships in the base image
+  # (docling-jobkit#263, jobkit v3.8.1). Asserted against the real `lib` path,
+  # not the `lib64` symlink, so a future base bump that regresses it fails here
+  # instead of breaking every S3-source batch conversion at runtime.
+  - name: "base image still carries the upstream DocumentChunk pickling fix"
+    path: "/opt/app-root/lib/python3.12/site-packages/docling_jobkit/orchestrators/ray/models.py"
+    expectedContents:
+      - "chunk: DocumentChunk = Field\\("
+    excludedContents:
+      - "chunk: DocumentChunk\\[Any, Any\\]"

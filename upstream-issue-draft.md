@@ -4,6 +4,12 @@ with a one-line fix, verified end-to-end. Finding 2 (further down) is a design
 issue in how tasks are queued for durability — no patch proposed yet, flagging
 for discussion.
 
+> **Status (2026-10-24):** Finding 1 is **fixed upstream** — the identical
+> one-line change landed as
+> [docling-jobkit#263](https://github.com/docling-project/docling-jobkit/pull/263)
+> (jobkit v3.8.1, first shipped in docling-serve v1.36.0). Finding 2 is still
+> open.
+
 ---
 
 # Finding 1

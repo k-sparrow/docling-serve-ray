@@ -3,3 +3,16 @@ target-version = "py312"
 exclude = [
     "bazel-*",
 ]
+
+[format]
+# Vendored upstream file: docling-serve's own app.py plus our two-hunk 429
+# patch. Kept byte-identical to upstream outside those hunks so the patch
+# stays a clean, re-appliable diff against each release -- upstream formats
+# with a newer ruff than the one aspect_rules_lint bundles here, and
+# reformatting would bake whitespace-only churn into that diff. (The lint
+# aspect never sees it either: it only visits py_* rules, and this file only
+# feeds a tar layer -- the patch is covered by the image's structure and
+# import tests instead.)
+exclude = [
+    "src/patches/docling_serve/app.py",
+]

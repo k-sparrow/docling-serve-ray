@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import gc
 import hashlib
 import importlib.metadata
@@ -10,6 +9,7 @@ import time
 from collections import Counter
 from contextlib import asynccontextmanager
 from io import BytesIO
+from pathlib import Path
 from typing import Annotated, Any
 
 import psutil
@@ -99,7 +99,12 @@ from docling_jobkit.orchestrators.base_orchestrator import (
 from docling_jobkit.orchestrators.rq.orchestrator import RQOrchestrator
 
 from docling_serve.auth import APIKeyAuth, AuthenticationResult
-from docling_serve.helper_functions import DOCLING_VERSIONS, FormDepends
+from docling_serve.capabilities import CapabilitiesResponse, build_capabilities
+from docling_serve.helper_functions import (
+    DOCLING_VERSIONS,
+    FormDepends,
+    parse_callback_item,
+)
 from docling_serve.logging_config import setup_logging
 from docling_serve.orchestrator_factory import get_async_orchestrator
 from docling_serve.otel_instrumentation import (
@@ -146,6 +151,8 @@ setup_logging(
 )
 
 _log = logging.getLogger(__name__)
+
+UI_STATIC_PATH = Path(__file__).parent / "ui_static"
 
 # Tracks whether warm_up_caches() has completed.  Meaningful only for the
 # LocalOrchestrator (which eagerly loads ML models); the RQ orchestrator's
@@ -267,8 +274,12 @@ def create_app():  # noqa: C901
     )
     BatchConvertSourcesRequestModel = build_batch_request_model(service_policy)
 
+    # Without an openapi_url FastAPI registers neither the schema nor its Swagger
+    # UI and ReDoc pages; the reference routes added below follow the same flag.
+    api_docs_enabled = docling_serve_settings.enable_api_docs
     app = FastAPI(
         title="Docling Serve",
+        openapi_url="/openapi.json" if api_docs_enabled else None,
         docs_url=None if offline_docs_assets else "/swagger",
         redoc_url=None if offline_docs_assets else "/docs",
         lifespan=lifespan,
@@ -330,7 +341,7 @@ def create_app():  # noqa: C901
         # Local patch (not upstream): QueueLimitExceededError (raised by
         # RayOrchestrator.enqueue when DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION
         # is on and a tenant's queue is full) has no registered handler in
-        # stock docling-serve as of v1.29.0-v1.31.0 -- it propagates as an
+        # stock docling-serve as of v1.29.0-v1.38.1 -- it propagates as an
         # unhandled 500, not the documented 429 (.env.example's own
         # "Return 429 if queue limit exceeded" comment). Confirmed live
         # against the real v1.29.0-based image: 17/20 concurrent requests at
@@ -409,37 +420,34 @@ def create_app():  # noqa: C901
         allow_headers=headers,
     )
 
-    # Mount the Gradio app
+    # Serve the web UI. The bundle is built from `ui/` and shipped in the package.
     if docling_serve_settings.enable_ui:
-        try:
-            import gradio as gr
+        if (UI_STATIC_PATH / "index.html").is_file():
+            app.frontend("/ui", directory=UI_STATIC_PATH, check_dir=False)
 
-            from docling_serve.gradio_ui import ui as gradio_ui
-            from docling_serve.settings import uvicorn_settings
+            @app.get("/", include_in_schema=False)
+            def ui_redirect() -> RedirectResponse:
+                # Relative, so it also works behind a proxy root path.
+                return RedirectResponse(url="ui/")
 
-            tmp_output_dir = get_scratch() / "gradio"
-            tmp_output_dir.mkdir(exist_ok=True, parents=True)
-            gradio_ui.gradio_output_dir = tmp_output_dir
-
-            # Build the root_path for Gradio, accounting for UVICORN_ROOT_PATH
-            gradio_root_path = (
-                f"{uvicorn_settings.root_path}/ui"
-                if uvicorn_settings.root_path
-                else "/ui"
-            )
-
-            app = gr.mount_gradio_app(
-                app,
-                gradio_ui,
-                path="/ui",
-                allowed_paths=["./logo.png", tmp_output_dir],
-                root_path=gradio_root_path,
-            )
-        except ImportError:
+            @app.middleware("http")
+            async def ui_cache_headers(request: Request, call_next):
+                response = await call_next(request)
+                path = request.url.path
+                if "/ui/assets/" in path:
+                    # Vite puts a content hash in every asset file name.
+                    response.headers.setdefault(
+                        "Cache-Control", "public, max-age=31536000, immutable"
+                    )
+                elif path.endswith("/ui") or "/ui/" in path:
+                    # index.html must be revalidated to pick up new releases.
+                    response.headers.setdefault("Cache-Control", "no-cache")
+                return response
+        else:
             _log.warning(
-                "Docling Serve enable_ui is activated, but gradio is not installed. "
-                "Install it with `pip install docling-serve[ui]` "
-                "or `pip install gradio`"
+                "Docling Serve enable_ui is activated, but the UI bundle was not "
+                "found in %s. Build it with `npm --prefix ui run build`.",
+                UI_STATIC_PATH,
             )
 
     #############################
@@ -451,6 +459,8 @@ def create_app():  # noqa: C901
             StaticFiles(directory=docling_serve_settings.static_path),
             name="static",
         )
+
+    if offline_docs_assets and api_docs_enabled:
 
         @app.get("/swagger", include_in_schema=False)
         async def custom_swagger_ui_html():
@@ -474,14 +484,16 @@ def create_app():  # noqa: C901
                 redoc_js_url="/static/redoc.standalone.js",
             )
 
-    @app.get("/scalar", include_in_schema=False)
-    async def scalar_html():
-        return get_scalar_api_reference(
-            openapi_url=app.openapi_url,
-            title=app.title,
-            scalar_favicon_url="https://raw.githubusercontent.com/docling-project/docling/refs/heads/main/docs/assets/logo.svg",
-            # hide_client_button=True,  # not yet released but in main
-        )
+    if api_docs_enabled:
+
+        @app.get("/scalar", include_in_schema=False)
+        async def scalar_html():
+            return get_scalar_api_reference(
+                openapi_url=app.openapi_url,
+                title=app.title,
+                scalar_favicon_url="https://raw.githubusercontent.com/docling-project/docling/refs/heads/main/docs/assets/logo.svg",
+                # hide_client_button=True,  # not yet released but in main
+            )
 
     ########################
     # Async / Sync helpers #
@@ -738,80 +750,9 @@ def create_app():  # noqa: C901
             return ZipTarget()
         return InBodyTarget()
 
-    ##########################################
-    # Downgrade openapi 3.1 to 3.0.x helpers #
-    ##########################################
-
-    def ensure_array_items(schema):
-        """Ensure that array items are defined."""
-        if "type" in schema and schema["type"] == "array":
-            if "items" not in schema or schema["items"] is None:
-                schema["items"] = {"type": "string"}
-            elif isinstance(schema["items"], dict):
-                if "type" not in schema["items"]:
-                    schema["items"]["type"] = "string"
-
-    def handle_discriminators(schema):
-        """Ensure that discriminator properties are included in required."""
-        if "discriminator" in schema and "propertyName" in schema["discriminator"]:
-            prop = schema["discriminator"]["propertyName"]
-            if "properties" in schema and prop in schema["properties"]:
-                if "required" not in schema:
-                    schema["required"] = []
-                if prop not in schema["required"]:
-                    schema["required"].append(prop)
-
-    def handle_properties(schema):
-        """Ensure that property 'kind' is included in required."""
-        if "properties" in schema and "kind" in schema["properties"]:
-            if "required" not in schema:
-                schema["required"] = []
-            if "kind" not in schema["required"]:
-                schema["required"].append("kind")
-
-    # Downgrade openapi 3.1 to 3.0.x
-    def downgrade_openapi31_to_30(spec):
-        def strip_unsupported(obj):
-            if isinstance(obj, dict):
-                if "const" in obj and "enum" not in obj:
-                    obj = {**obj, "enum": [obj["const"]]}
-                obj = {
-                    k: strip_unsupported(v)
-                    for k, v in obj.items()
-                    if k not in ("const", "examples", "prefixItems")
-                }
-
-                handle_discriminators(obj)
-                ensure_array_items(obj)
-
-                # Check for oneOf and anyOf to handle nested schemas
-                for key in ["oneOf", "anyOf"]:
-                    if key in obj:
-                        for sub in obj[key]:
-                            handle_discriminators(sub)
-                            ensure_array_items(sub)
-
-                return obj
-            elif isinstance(obj, list):
-                return [strip_unsupported(i) for i in obj]
-            return obj
-
-        if "components" in spec and "schemas" in spec["components"]:
-            for schema_name, schema in spec["components"]["schemas"].items():
-                handle_properties(schema)
-
-        return strip_unsupported(copy.deepcopy(spec))
-
     #############################
     # API Endpoints definitions #
     #############################
-
-    @app.get("/openapi-3.0.json")
-    def openapi_30():
-        spec = app.openapi()
-        downgraded = downgrade_openapi31_to_30(spec)
-        downgraded["openapi"] = "3.0.3"
-        return JSONResponse(downgraded)
 
     # Favicon
     @app.get("/favicon.ico", include_in_schema=False)
@@ -878,6 +819,16 @@ def create_app():  # noqa: C901
     def api_check() -> HealthCheckResponse:
         return HealthCheckResponse()
 
+    if docling_serve_settings.enable_capabilities_endpoint:
+
+        @app.get("/v1/capabilities", tags=["health"])
+        def capabilities() -> CapabilitiesResponse:
+            return build_capabilities(
+                settings=docling_serve_settings,
+                policy=service_policy,
+                versions=DOCLING_VERSIONS,
+            )
+
     # Docling versions
     @app.get("/version", tags=["health"])
     def version_info() -> dict:
@@ -888,15 +839,18 @@ def create_app():  # noqa: C901
             )
         return DOCLING_VERSIONS
 
-    # Prometheus metrics endpoint
-    @app.get("/metrics", tags=["health"], include_in_schema=False)
-    def metrics():
-        from fastapi.responses import PlainTextResponse
+    # Prometheus metrics endpoint. Registered only while the Prometheus export is
+    # enabled, so a deployment that turns it off exposes no key-less route.
+    if docling_serve_settings.otel_enable_prometheus:
 
-        return PlainTextResponse(
-            content=get_metrics_endpoint_content(),
-            media_type="text/plain; version=0.0.4",
-        )
+        @app.get("/metrics", tags=["health"], include_in_schema=False)
+        def metrics():
+            from fastapi.responses import PlainTextResponse
+
+            return PlainTextResponse(
+                content=get_metrics_endpoint_content(),
+                media_type="text/plain; version=0.0.4",
+            )
 
     # Convert a document from URL(s)
     @app.post(
@@ -974,6 +928,17 @@ def create_app():  # noqa: C901
             ConvertDocumentsRequestOptions, FormDepends(ConvertDocumentsRequestOptions)
         ],
         target_type: Annotated[TargetName, Form()] = default_target_name,
+        callbacks_raw: Annotated[
+            list[str],
+            Form(
+                alias="callbacks",
+                description=(
+                    "Callback endpoint(s). Repeat the field for multiple callbacks. "
+                    "Each value is either a bare URL (e.g. https://hook.example.com/done) "
+                    'or a JSON-encoded CallbackSpec object (e.g. {"url":"https://…","headers":{"X-Token":"abc"}}).'
+                ),
+            ),
+        ] = [],
         x_tenant_id: Annotated[
             str | None, Header(alias=docling_serve_settings.eng_ray_tenant_id_header)
         ] = None,
@@ -984,6 +949,7 @@ def create_app():  # noqa: C901
         tenant_id = _get_tenant_id_from_header(x_tenant_id)
         _log.info(f"[TENANT_ID] process_file endpoint received tenant_id='{tenant_id}'")
         target = _resolve_file_target(target_type)
+        callbacks = [parse_callback_item(v) for v in callbacks_raw]
         task = await _enqueue_file(
             task_type=TaskType.CONVERT,
             orchestrator=orchestrator,
@@ -992,7 +958,7 @@ def create_app():  # noqa: C901
             chunking_options=None,
             chunking_export_options=None,
             target=target,
-            callbacks=[],
+            callbacks=callbacks,
             tenant_id=tenant_id,
         )
         completed = await _wait_task_complete(
@@ -1106,6 +1072,17 @@ def create_app():  # noqa: C901
             ConvertDocumentsRequestOptions, FormDepends(ConvertDocumentsRequestOptions)
         ],
         target_type: Annotated[TargetName, Form()] = default_target_name,
+        callbacks_raw: Annotated[
+            list[str],
+            Form(
+                alias="callbacks",
+                description=(
+                    "Callback endpoint(s). Repeat the field for multiple callbacks. "
+                    "Each value is either a bare URL (e.g. https://hook.example.com/done) "
+                    'or a JSON-encoded CallbackSpec object (e.g. {"url":"https://…","headers":{"X-Token":"abc"}}).'
+                ),
+            ),
+        ] = [],
         x_tenant_id: Annotated[
             str | None, Header(alias=docling_serve_settings.eng_ray_tenant_id_header)
         ] = None,
@@ -1118,6 +1095,7 @@ def create_app():  # noqa: C901
             f"[TENANT_ID] process_file_async endpoint received tenant_id='{tenant_id}'"
         )
         target = _resolve_file_target(target_type)
+        callbacks = [parse_callback_item(v) for v in callbacks_raw]
         task = await _enqueue_file(
             task_type=TaskType.CONVERT,
             orchestrator=orchestrator,
@@ -1126,7 +1104,7 @@ def create_app():  # noqa: C901
             chunking_options=None,
             chunking_export_options=None,
             target=target,
-            callbacks=[],
+            callbacks=callbacks,
             tenant_id=tenant_id,
         )
         task_queue_position = await orchestrator.get_queue_position(

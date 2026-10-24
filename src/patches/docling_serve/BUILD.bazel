@@ -1,35 +1,42 @@
-"""Bazel/rules_oci build for the docling-serve app.py patch.
+"""Bazel/rules_oci build for the patched docling-serve image.
 
 Layers a full-file replacement of `docling_serve/app.py` on top of the
-official `ghcr.io/docling-project/docling-serve-cu128:v1.29.0` base, adding
-the missing QueueLimitExceededError -> 429 exception handler. See app.py's
-own comment on the patch for the full root-cause writeup (upstream issue
-docling-project/docling-serve#581, unmerged fix docling-project/docling-serve#583).
+official `ghcr.io/docling-project/docling-serve-cu128:v1.36.0` base via a
+real rules_oci `oci_image`, pinned to the same base image digest MODULE.bazel
+pulls, adding the missing QueueLimitExceededError -> 429 exception handler.
+See app.py's own comment on the patch for the full root-cause writeup
+(upstream issue docling-project/docling-serve#581, unmerged fix
+docling-project/docling-serve#583).
 
-Combined with the docling_jobkit/orchestrators/ray models.py patch into one
-final image by //src/patches/docling_jobkit/orchestrators/ray:image (its
-`tars` list references this package's :app.py.pkg directly) -- this
-package only produces the tar layer, not a standalone image.
+This image used to carry a second patch, docling-jobkit's models.py
+(`SourceChunkConvertRequest.chunk` typed as `DocumentChunk[Any, Any]`, which
+broke every S3-source batch conversion under Ray's cross-replica pickling --
+see //upstream-issue-draft.md). That fix landed upstream as
+docling-project/docling-jobkit#263 (jobkit v3.8.1, first shipped in
+docling-serve v1.36.0), so the overlay was dropped; the structure test below
+keeps asserting the base image still has it, so a future base bump can't
+silently regress it.
+
+See ./Containerfile for the plain `docker build` equivalent (kept as the
+non-Bazel fallback).
 """
 
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
 load("@container_structure_test//:defs.bzl", "container_structure_test")
 load("@pip//:requirements.bzl", "requirement")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
 load("//tools/testing:pytest.bzl", py_test = "pytest_test")
 
 package(default_visibility = ["//:__subpackages__"])
 
-# NOT the site-packages path (unlike the docling_jobkit models.py patch):
-# docling_serve is installed *editable* (PEP 660, via
-# __editable__.docling_serve-1.29.0.pth -> __editable___docling_serve_1_29_0_finder.py),
-# so Python's import resolves straight to this src path regardless of what's
-# overlaid at site-packages -- confirmed by
-# `python3 -c 'import docling_serve.app as m; print(m.__file__)'` printing
-# /opt/app-root/src/docling_serve/app.py inside the built image. A
+# NOT the site-packages path: docling_serve is installed *editable* (PEP 660,
+# via __editable__.docling_serve-1.36.0.pth ->
+# __editable___docling_serve_1_36_0_finder.py), so Python's import resolves
+# straight to this src path regardless of what's overlaid at site-packages --
+# confirmed by `python3 -c 'import docling_serve.app as m; print(m.__file__)'`
+# printing /opt/app-root/src/docling_serve/app.py inside the base image. A
 # site-packages overlay here builds byte-for-byte correct and just silently
-# never gets imported -- same failure class as the lib/lib64 symlink gotcha
-# the docling_jobkit patch's BUILD.bazel documents, just via a different
-# mechanism (editable-install finder, not a shadowed symlink).
+# never gets imported.
 _SERVE_APP_DIR = "opt/app-root/src/docling_serve"
 
 exports_files(["app.py"])
@@ -44,7 +51,8 @@ mtree_mutate(
     group = "0",
     mtree = ":app.py.spec",
     # Same ownership as the base image's own files -- uid 1001 (app-root
-    # non-root user), gid 0/root. Matches the docling_jobkit patch's owner.
+    # non-root user), gid 0/root -- same as the Containerfile's
+    # `COPY --chown=1001:0`.
     owner = "1001",
     package_dir = _SERVE_APP_DIR,
     strip_prefix = package_name(),
@@ -56,17 +64,35 @@ tar(
     mtree = ":app.py.mtree",
 )
 
+oci_image(
+    name = "image",
+    base = "@docling-serve-cu128",
+    tars = [":app.py.pkg"],
+)
+
+# CI-only CPU variant -- same patch, same v1.36.0 release, just a different
+# torch/onnxruntime backend underneath. GitHub-hosted CI runners have no GPU,
+# so the Docker-dependent test suite runs this instead of :image/:tarball.
+oci_image(
+    name = "image.cpu",
+    base = "@docling-serve-cpu",
+    tars = [":app.py.pkg"],
+)
+
 container_structure_test(
     name = "structure_test",
     configs = ["tests/structural/structure_test.yaml"],
-    image = "//src/patches/docling_jobkit/orchestrators/ray:image",
+    image = ":image",
 )
 
 py_test(
     name = "test_patch_is_imported",
     srcs = ["tests/functional/test_patch_is_imported.py"],
-    # Same reasoning as the docling_jobkit patch's own test_patch_is_imported --
-    # needs the host Docker socket and an already-loaded image.
+    # Shells out to the real Docker daemon (docker.from_env()) -- needs the
+    # host's Docker socket, which Bazel's sandbox doesn't expose. Also
+    # depends on `bazel run //src/patches/docling_serve:tarball` already
+    # having loaded the image locally; not run as part of a plain
+    # `bazel test //...`.
     tags = [
         "integration",
         "local",
@@ -74,5 +100,41 @@ py_test(
     ],
     deps = [
         requirement("docker"),
+    ],
+)
+
+# bazel run //src/patches/docling_serve:tarball
+# loads the patched image into the local Docker daemon as:
+#   docling-serve-ray-patched:v1.36.0-bazel
+#   docling-serve-ray-patched:latest
+oci_load(
+    name = "tarball",
+    image = ":image",
+    repo_tags = [
+        "docling-serve-ray-patched:v1.36.0-bazel",
+        "docling-serve-ray-patched:latest",
+    ],
+)
+
+# bazel run //src/patches/docling_serve:push
+# Pushes the GPU image to GHCR -- run in CI only (see
+# .github/workflows/ci.yml's push-images job), after tests pass, on push to
+# main. The CI-only :image.cpu variant is never pushed -- it's test
+# infrastructure, not a deployable artifact.
+oci_push(
+    name = "push",
+    image = ":image",
+    remote_tags = ["latest"],
+    repository = "ghcr.io/k-sparrow/docling-serve-ray-patched",
+)
+
+# bazel run //src/patches/docling_serve:tarball.cpu
+# loads the CI-only CPU-patched image as:
+#   docling-serve-ray-patched:v1.36.0-bazel-cpu
+oci_load(
+    name = "tarball.cpu",
+    image = ":image.cpu",
+    repo_tags = [
+        "docling-serve-ray-patched:v1.36.0-bazel-cpu",
     ],
 )
