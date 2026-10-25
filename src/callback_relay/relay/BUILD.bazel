@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "relay",
+    srcs = ["relay.go"],
+    importpath = "github.com/k-sparrow/docling-serve-ray/src/callback_relay/relay",
+    visibility = ["//visibility:public"],
+    deps = ["@io_temporal_go_api//serviceerror"],
+)
+
+go_test(
+    name = "relay_test",
+    srcs = ["relay_test.go"],
+    deps = [
+        ":relay",
+        "@io_temporal_go_api//serviceerror",
+    ],
+)

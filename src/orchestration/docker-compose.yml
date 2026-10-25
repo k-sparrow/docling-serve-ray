@@ -5,17 +5,23 @@
 # /v1/convert/source/batch path handles without any document bytes in Redis.
 #
 # Bring the main stack up FIRST: the worker joins its network (external, by
-# name) to reach docling-serve:5001 and minio:9000.
+# name) to reach docling-serve:5001 and minio:9000, and the callback relay
+# joins it so docling's Ray workers can reach callback-relay:8080.
 #
 #   docker compose up -d                                   # main stack
 #   docker compose -f src/orchestration/docker-compose.yml up -d
 #
-# Images are official and pinned by digest, except the worker
-# (`bazel run //src/orchestration:tarball`). temporalio/auto-setup is not
+# Images are official and pinned by digest, except the worker and the relay
+# (`bazel run //src/orchestration:tarball`, `bazel run
+# //src/callback_relay:tarball`). temporalio/auto-setup is not
 # used: it stopped being published at 1.29.x while the server moved on, so
 # schema setup is an explicit admin-tools one-shot instead -- the same
 # split Temporal's own reference compose (temporalio/samples-server) uses.
 name: docling-temporal
+
+# Shared secret on every docling callback, checked by the relay. Override
+# CALLBACK_TOKEN outside local development.
+x-callback-token: &callback-token ${CALLBACK_TOKEN:-dev-callback-token}
 
 x-temporal-db-env: &temporal-db-env
   DB: postgres12
@@ -122,6 +128,31 @@ services:
     ports:
       - "127.0.0.1:${TEMPORAL_UI_HOST_PORT:-8080}:8080"
 
+  callback-relay:
+    # Built via `bazel run //src/callback_relay:tarball`. docling-serve's Ray
+    # workers POST each task's completion here; the relay turns it into the
+    # task_completed signal of the workflow named in the callback URL.
+    # Stateless, so it may run several replicas. Deliberately not published
+    # to the host: the token travels in every submit and sits in docling's
+    # Redis task records.
+    image: docling-serve-ray-callback-relay:latest
+    depends_on:
+      temporal-namespace:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    environment:
+      RELAY_TEMPORAL_ADDRESS: temporal:7233
+      RELAY_CALLBACK_TOKEN: *callback-token
+    healthcheck:
+      # distroless: no shell or curl, so the binary probes itself.
+      test: ["CMD", "/callback_relay", "-healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - default
+      - docling
+
   worker:
     # Built via `bazel run //src/orchestration:tarball`. Containerfile
     # fallback: `docker build -f src/orchestration/Containerfile -t docling-serve-ray-orchestration .`
@@ -142,6 +173,11 @@ services:
       ORCH_S3_ENDPOINT_URL: http://minio:9000
       ORCH_S3_ACCESS_KEY: minioadmin
       ORCH_S3_SECRET_KEY: minioadmin123
+      # The address docling's Ray workers (not this worker) call back on.
+      # No depends_on for the relay: while it's down, workflows still
+      # finish on their safety polls, just later.
+      ORCH_CALLBACK_BASE_URL: http://callback-relay:8080
+      ORCH_CALLBACK_TOKEN: *callback-token
     networks:
       - default
       - docling

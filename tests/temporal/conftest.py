@@ -1,7 +1,7 @@
 """Two real compose stacks, wired the way they're deployed: the main stack's
 conversion backend (MinIO, Redis, Ray, docling-serve -- no facade/nginx, the
 orchestration path doesn't use them) plus src/orchestration's Temporal stack,
-whose worker joins the main stack's network by name.
+whose worker and callback relay join the main stack's network by name.
 
 Driven with plain `docker compose -p <project>` rather than testcontainers'
 DockerCompose: the two stacks need distinct project names, and a
@@ -17,6 +17,7 @@ import os
 import socket
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import boto3
@@ -92,9 +93,11 @@ def stacks():
         # second -- same order as a real deployment.
         _compose(_TEMPORAL_PROJECT, temporal_files, "up", "-d", env=temporal_env)
         _wait_healthy(f"{_TEMPORAL_PROJECT}-temporal-1", timeout=180)
+        _wait_healthy(f"{_TEMPORAL_PROJECT}-callback-relay-1", timeout=180)
         yield {
             "temporal_address": f"localhost:{temporal_port}",
             "worker_container": f"{_TEMPORAL_PROJECT}-worker-1",
+            "relay_container": f"{_TEMPORAL_PROJECT}-callback-relay-1",
             "temporal_project": _TEMPORAL_PROJECT,
             "temporal_files": temporal_files,
             "temporal_env": temporal_env,
@@ -105,6 +108,25 @@ def stacks():
             _TEMPORAL_PROJECT, temporal_files, "down", "--volumes", env=temporal_env
         )
         _compose(_MAIN_PROJECT, main_files, "down", "--volumes")
+
+
+@pytest.fixture
+def relay_down(stacks):
+    """The callback relay stopped for the test's duration -- every docling
+    callback in that window is lost -- then restarted and healthy again
+    before the next test."""
+
+    @contextmanager
+    def down():
+        relay = stacks["relay_container"]
+        subprocess.run(["docker", "stop", relay], check=True)
+        try:
+            yield
+        finally:
+            subprocess.run(["docker", "start", relay], check=True)
+            _wait_healthy(relay, timeout=60)
+
+    return down
 
 
 @pytest_asyncio.fixture

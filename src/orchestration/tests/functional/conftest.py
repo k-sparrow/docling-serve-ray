@@ -27,7 +27,8 @@ def settings() -> Settings:
         s3_secret_key="sk",
         output_bucket="out",
         output_prefix="temporal/",
-        status_poll_wait_seconds=0.01,
+        callback_base_url="http://relay.test/",
+        callback_token="tok",
     )
 
 

@@ -6,6 +6,7 @@ load this module without passthrough.
 """
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 # Task queues are constants, not settings: the workflow routes activities to
 # them, and workflow code can't read per-process configuration
@@ -28,6 +29,40 @@ SUBMIT_TASK_QUEUE = "docling-submit"
 REQUIRED_FORMAT = "json"
 DEFAULT_TO_FORMATS = ["json", "md"]
 
+# Signal the callback relay (src/callback_relay) sends when docling-serve
+# reports a task finished. Part of the relay's contract, like TaskCompleted's
+# field names below.
+TASK_COMPLETED_SIGNAL = "task_completed"
+
+# How long a workflow sleeps waiting for that signal before checking the task
+# itself, and how many such checks it makes before giving up. 600 x ~5 min
+# covers ~50h: up to 24h queued behind other documents (8 queued x 2 slots x
+# ~6h) plus up to DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT (24h) running.
+DEFAULT_SAFETY_POLL_INTERVAL_SECONDS = 300
+DEFAULT_MAX_SAFETY_POLLS = 600
+
+
+class ErrorType(StrEnum):
+    """ApplicationError.type of every failure the activities and workflow
+    raise (see activities.py for which are retryable). The values are what
+    Temporal records in history and shows in the UI, and what the workflow
+    matches on -- renaming one breaks replay of runs already in flight."""
+
+    QUEUE_FULL = "QueueFull"
+    UPSTREAM_ERROR = "UpstreamError"
+    SUBMIT_REJECTED = "SubmitRejected"
+    TASK_LOST = "TaskLost"
+    CONVERSION_FAILED = "ConversionFailed"
+    MISSING_OUTPUTS = "MissingOutputs"
+    POLL_BUDGET_EXHAUSTED = "PollBudgetExhausted"
+
+
+class TaskStatus(StrEnum):
+    """docling-serve's terminal task states."""
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+
 
 @dataclass
 class ConvertInput:
@@ -37,6 +72,12 @@ class ConvertInput:
     # Any other ConvertDocumentsOptions fields (do_ocr, page_range, ...),
     # forwarded to docling-serve untouched.
     options: dict = field(default_factory=dict)
+    # Average sleep between safety polls (jittered +/-20%) -- also the
+    # worst-case extra latency when a callback is lost.
+    safety_poll_interval_seconds: int = DEFAULT_SAFETY_POLL_INTERVAL_SECONDS
+    # Safety polls that find the task still in progress before the workflow
+    # gives up on it (PollBudgetExhausted). Per submission.
+    max_safety_polls: int = DEFAULT_MAX_SAFETY_POLLS
 
 
 @dataclass
@@ -50,6 +91,17 @@ class SubmitConversionInput:
 class CollectOutputsInput:
     bucket: str
     key: str
+
+
+@dataclass
+class TaskCompleted:
+    """Terminal state of a docling task, from either path: the callback
+    relay's signal or a safety poll. Field names are the relay's JSON
+    contract -- its Go struct is tagged the same way."""
+
+    task_id: str
+    task_status: TaskStatus
+    error_message: str | None = None
 
 
 @dataclass
@@ -77,6 +129,9 @@ class ConvertResult:
     outputs: dict[str, list[str]]
     output_bucket: str
     submissions: int
+    # Safety polls made across all submissions -- 0 when every callback
+    # arrived before its first timer expired.
+    safety_polls: int
 
 
 def workflow_id_for_convert(bucket: str, key: str) -> str:

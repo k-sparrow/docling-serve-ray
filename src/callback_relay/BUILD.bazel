@@ -1,0 +1,103 @@
+"""Bazel/rules_oci build for the callback relay image, following rules_oci's
+Go guide (docs/go.md) and its reference example,
+aspect-build/bazel-examples/oci_go_image.
+
+The go_* rules are gazelle-generated (`bazel run //:gazelle`) -- edit Go
+imports, not deps here. The binary is pure Go (cgo off), so it's statically
+linked and runs on distroless/static, which has no libc.
+"""
+
+load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
+load("@tar.bzl", "mutate", "tar")
+
+package(default_visibility = ["//:__subpackages__"])
+
+go_library(
+    name = "callback_relay_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/k-sparrow/docling-serve-ray/src/callback_relay",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/callback_relay/relay",
+        "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//log",
+    ],
+)
+
+go_binary(
+    name = "callback_relay",
+    embed = [":callback_relay_lib"],
+    pure = "on",
+    visibility = ["//visibility:public"],
+)
+
+# The go_binary as an image layer, at /callback_relay rather than its Bazel
+# output path (src/callback_relay/callback_relay_/callback_relay).
+tar(
+    name = "app_layer",
+    srcs = [":callback_relay"],
+    out = "app_layer.tar",
+    mutate = mutate(strip_prefix = package_name() + "/callback_relay_"),
+)
+
+# Pins the binary's path inside the layer -- the entrypoint below and the
+# compose healthcheck both depend on it.
+assert_archive_contains(
+    name = "test_app_layer",
+    archive = "app_layer.tar",
+    expected = ["callback_relay"],
+)
+
+oci_image(
+    name = "image",
+    base = "@distroless_static",
+    entrypoint = ["/callback_relay"],
+    exposed_ports = ["8080/tcp"],
+    # Links the GHCR package back to this repository.
+    labels = {
+        "org.opencontainers.image.source": "https://github.com/k-sparrow/docling-serve-ray",
+    },
+    tars = [":app_layer"],
+)
+
+# The image as released, built for linux/amd64 whatever the host is (a Go
+# cross-compile; the base is only pulled for linux/amd64). Every target below
+# uses this one, never :image directly.
+platform_transition_filegroup(
+    name = "transitioned_image",
+    srcs = [":image"],
+    target_platform = "@rules_go//go/toolchain:linux_amd64",
+)
+
+container_structure_test(
+    name = "structure_test",
+    configs = ["//src/callback_relay/tests/structural:structure_test.yaml"],
+    image = ":transitioned_image",
+)
+
+# bazel run //src/callback_relay:tarball
+# loads the relay image into the local Docker daemon as:
+#   docling-serve-ray-callback-relay:bazel
+#   docling-serve-ray-callback-relay:latest
+oci_load(
+    name = "tarball",
+    image = ":transitioned_image",
+    repo_tags = [
+        "docling-serve-ray-callback-relay:bazel",
+        "docling-serve-ray-callback-relay:latest",
+    ],
+)
+
+# bazel run //src/callback_relay:push
+# Pushes to GHCR -- run in CI only (see .github/workflows/ci.yml's
+# push-images job), after tests pass, on push to main.
+oci_push(
+    name = "push",
+    image = ":transitioned_image",
+    remote_tags = ["latest"],
+    repository = "ghcr.io/k-sparrow/docling-serve-ray-callback-relay",
+)

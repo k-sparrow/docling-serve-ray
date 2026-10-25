@@ -30,10 +30,16 @@ class Settings(BaseSettings):
     docling_serve_url: str = "http://localhost:5001"
     tenant_id: str | None = None
     tenant_id_header: str = "X-Tenant-Id"
-    # Server-side long-poll window per /v1/status/poll call. Must stay well
-    # under the wait activity's heartbeat timeout (workflows.py), since the
-    # activity heartbeats once per poll.
-    status_poll_wait_seconds: float = 30.0
+
+    # Where docling-serve's Ray workers reach the callback relay
+    # (src/callback_relay), which turns docling's completion callback into
+    # the workflow's task_completed signal. Unset: no callback is registered
+    # and workflows advance on their safety polls alone.
+    callback_base_url: str | None = None
+    # Shared secret the relay checks on every callback. It travels in each
+    # submit request, so docling keeps it in its Redis task record -- the
+    # relay must stay internal to the compose network.
+    callback_token: str = ""
 
     # How docling-serve's Ray workers reach S3 (compose DNS) -- goes into the
     # S3 coordinates of every submit request.

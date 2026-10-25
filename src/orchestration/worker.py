@@ -45,7 +45,7 @@ async def run() -> None:
             client,
             task_queue=TASK_QUEUE,
             workflows=[ConvertDocumentWorkflow],
-            activities=[acts.wait_for_task, acts.collect_outputs],
+            activities=[acts.check_task, acts.fetch_outcome, acts.collect_outputs],
             max_concurrent_activities=settings.max_concurrent_activities,
         )
         submit = Worker(
@@ -62,9 +62,9 @@ async def run() -> None:
                 settings.docling_serve_url,
             )
             await shutdown.wait()
-        # Leaving the context managers drains in-flight activities. A wait
-        # cut short is simply retried later; a submit cut short after its POST
-        # landed can't be undone -- the documented at-least-once case.
+        # Leaving the context managers drains in-flight activities. A status
+        # check cut short is simply retried later; a submit cut short after
+        # its POST landed can't be undone -- the documented at-least-once case.
 
 
 def main() -> None:

@@ -7,13 +7,15 @@ name: CI
 # flake8 isn't included here (unlike Artemis) -- see MODULE.bazel's LINT &
 # FORMAT section for why. Runs first and gates test/test-docker: cheap,
 # fast, and catches style noise before spending time on the heavier stages.
+# Go needs no step here: nogo runs go vet inside every Go compile, so any
+# build of the callback relay -- `test` below -- already fails on a finding.
 #
 # test -- the fast, hermetic sweep: container_structure_test targets (build
 # the OCI images, check them via container_structure_test's tar driver, no
-# Docker daemon needed), the facade's pytest unit suite, and
-# //tools/format:format_test (ruff/buildifier/yamlfmt formatting check --
-# it's an ordinary, non-manual test target, so it's already swept in here,
-# no separate step needed).
+# Docker daemon needed), the Python and Go unit suites, and the
+# ordinary, non-manual check targets already swept in by //...:
+# //tools/format:format_test (ruff/buildifier/yamlfmt/gofumpt) and
+# //:gazelle_test (Go BUILD files up to date) -- no separate steps needed.
 #
 # test-docker -- the patch-import check plus the testcontainers-driven
 # integration/e2e layers (real docker compose stacks, a real Docker
@@ -37,9 +39,10 @@ name: CI
 #
 # push-images runs after lint, test, and test-docker all succeed, and only
 # on push to main (not on PRs -- pushing an image for every PR branch would
-# clutter the registry with ephemeral tags nobody wants). Pushes the three
-# production images (patched docling-serve, facade, nginx) to GHCR as
-# :latest. The CI-only CPU-patched image is deliberately never pushed --
+# clutter the registry with ephemeral tags nobody wants). Pushes the five
+# production images (patched docling-serve, facade, nginx, orchestration
+# worker, callback relay) to GHCR as :latest, via //:push.all. The CI-only
+# CPU-patched image is deliberately never pushed --
 # it's test infrastructure, not a deployable artifact.
 
 on:
@@ -96,12 +99,13 @@ jobs:
           repository-cache: true
           external-cache: true
 
-      - name: Load images (CPU-patched docling-serve, facade, nginx, orchestration worker)
+      - name: Load images (CPU-patched docling-serve, facade, nginx, orchestration worker, callback relay)
         run: |
           bazel run //src/patches/docling_serve:tarball.cpu
           bazel run //src/facade:tarball
           bazel run //src/nginx:tarball
           bazel run //src/orchestration:tarball
+          bazel run //src/callback_relay:tarball
 
       - name: bazel test //:test.docker
         env:

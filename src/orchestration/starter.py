@@ -96,7 +96,8 @@ async def _convert(args: argparse.Namespace) -> int:
         )
         print(
             f"ok      s3://{args.bucket}/{key} -> s3://{result.output_bucket}/ "
-            f"[{formats}] task={result.task_id} submissions={result.submissions}"
+            f"[{formats}] task={result.task_id} submissions={result.submissions} "
+            f"safety_polls={result.safety_polls}"
         )
     return 1 if failed else 0
 

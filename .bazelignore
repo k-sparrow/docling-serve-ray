@@ -1,0 +1,4 @@
+# Local Python virtualenv (gitignored). temporalio's wheel vendors .proto and
+# .go sources (its Rust core's protos), which Bazel would otherwise load as
+# packages of this repo -- and gazelle would generate BUILD files for.
+.venv

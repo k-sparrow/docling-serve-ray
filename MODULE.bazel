@@ -65,6 +65,30 @@ pip.parse(
 )
 use_repo(pip, "pip")
 
+# ------------------ GO ------------------------------------------------------
+# The callback relay (src/callback_relay). The root go.mod is the single
+# source of truth: the SDK version comes from its `toolchain` directive and
+# the dependency set from its requires (hash-pinned by go.sum). Both are
+# fetched hermetically -- a Go installed on the host is never used. After
+# editing go.mod or Go imports:
+#   bazel run @rules_go//go -- mod tidy   # go.mod/go.sum with Bazel's Go; also
+#                                         # runs `bazel mod tidy`, which keeps
+#                                         # use_repo(go_deps) below in sync
+#   bazel run //:gazelle                  # regenerates the go_* BUILD rules
+bazel_dep(name = "rules_go", version = "0.64.2")
+bazel_dep(name = "gazelle", version = "0.54.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.from_file(go_mod = "//:go.mod")
+
+# go vet's analyzers run as part of every Go compile, failing the build on a
+# finding -- the Go counterpart of the ruff lint aspect (//tools/lint).
+go_sdk.nogo(nogo = "//tools/lint:nogo")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+use_repo(go_deps, "io_temporal_go_api", "io_temporal_go_sdk")
+
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
 # Pinned by digest, not just tag, for reproducibility. v1.36.0 is the first
@@ -110,6 +134,18 @@ oci.pull(
     tag = "1.27-alpine",
 )
 use_repo(oci, "nginx_alpine", "nginx_alpine_linux_amd64")
+
+# Base for the Go callback relay (src/callback_relay): no shell, package
+# manager or libc -- only CA certs, tzdata and the nonroot (65532) user. The
+# relay is a pure-Go static binary, so it needs nothing more.
+oci.pull(
+    name = "distroless_static",
+    digest = "sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99",
+    image = "gcr.io/distroless/static-debian13",
+    platforms = ["linux/amd64"],
+    tag = "nonroot",
+)
+use_repo(oci, "distroless_static", "distroless_static_linux_amd64")
 
 # ------------------ TEST-ONLY BINARIES --------------------------------------
 # Temporal's time-skipping test server, for //src/orchestration's workflow

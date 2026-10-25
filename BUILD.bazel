@@ -4,7 +4,10 @@
 #
 
 load("@buildifier_prebuilt//:rules.bzl", "buildifier")
+load("@gazelle//:def.bzl", "gazelle", "gazelle_test")
 load("@rules_multirun//:defs.bzl", "multirun")
+
+# gazelle:prefix github.com/k-sparrow/docling-serve-ray
 
 exports_files([
     "requirements_lock.txt",
@@ -22,6 +25,18 @@ alias(
     actual = "//tools/format",
 )
 
+# bazel run //:gazelle -- generates/updates the go_library/go_binary/go_test
+# rules from Go sources and imports (Go only: there's no Python plugin here,
+# Python BUILD files stay hand-written).
+# bazel test //:gazelle_test -- same, check-only: fails when a Go BUILD file
+# is stale, so `bazel test //...` catches a forgotten regeneration.
+gazelle(name = "gazelle")
+
+gazelle_test(
+    name = "gazelle_test",
+    workspace = "//:BUILD.bazel",
+)
+
 # bazel run //:buildifier.check
 # Ad hoc Starlark lint/diff outside the format_test flow above -- warns on
 # things buildifier's formatter alone won't catch (e.g. unsorted deps),
@@ -34,9 +49,10 @@ buildifier(
 )
 
 # bazel run //:load.all
-# Builds and loads all four custom images into the local Docker daemon in
+# Builds and loads all five custom images into the local Docker daemon in
 # one command -- docling-serve-ray-patched, docling-serve-ray-facade,
-# docling-serve-ray-nginx, docling-serve-ray-orchestration. Lists the actual runnable oci_load tarball targets
+# docling-serve-ray-nginx, docling-serve-ray-orchestration,
+# docling-serve-ray-callback-relay. Lists the actual runnable oci_load tarball targets
 # directly rather than composing this from per-image `command()` wrappers or
 # nested multirun targets -- mirrors Artemis's own tools/oci/images/BUILD.bazel
 # `load.all`, whose comment there documents a real gotcha: a nested multirun
@@ -48,6 +64,7 @@ multirun(
         "//src/facade:tarball",
         "//src/nginx:tarball",
         "//src/orchestration:tarball",
+        "//src/callback_relay:tarball",
     ],
 )
 
@@ -68,7 +85,7 @@ multirun(
 # test_suite can only bundle test targets, not the oci_load commands that
 # put those images on the Docker daemon in the first place.
 # bazel run //:push.all
-# Pushes all four custom images to GHCR in one command -- CI-only (see
+# Pushes all five custom images to GHCR in one command -- CI-only (see
 # .github/workflows/ci.yml's push-images job), same flat leaf-target list
 # convention as load.all (not composed from per-image wrappers or nested
 # multirun targets, for the same reason documented there).
@@ -79,6 +96,7 @@ multirun(
         "//src/facade:push",
         "//src/nginx:push",
         "//src/orchestration:push",
+        "//src/callback_relay:push",
     ],
 )
 

@@ -37,6 +37,18 @@ py_test(
 )
 
 py_test(
+    name = "test_docling_client",
+    srcs = ["test_docling_client.py"],
+    imports = ["../../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//src/orchestration:orchestration_lib",
+        requirement("docling-slim"),
+    ],
+)
+
+py_test(
     name = "test_workflows",
     srcs = ["test_workflows.py"],
     # The time-skipping test server MODULE.bazel pins by sha256 -- passed in

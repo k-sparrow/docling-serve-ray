@@ -52,12 +52,13 @@ jobs:
           repository-cache: true
           external-cache: true
 
-      - name: Load images (CPU-patched docling-serve, facade, nginx, orchestration worker)
+      - name: Load images (CPU-patched docling-serve, facade, nginx, orchestration worker, callback relay)
         run: |
           bazel run //src/patches/docling_serve:tarball.cpu
           bazel run //src/facade:tarball
           bazel run //src/nginx:tarball
           bazel run //src/orchestration:tarball
+          bazel run //src/callback_relay:tarball
 
       - name: bazel test //:test.docker
         env:

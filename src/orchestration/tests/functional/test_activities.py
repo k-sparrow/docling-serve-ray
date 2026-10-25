@@ -2,11 +2,13 @@
 
 The point of these is failure classification: which upstream responses
 Temporal retries on its own (QueueFull, UpstreamError) and which it must not
-(SubmitRejected, TaskLost, ConversionFailed) -- that split is what the
-workflow's retry policies and resubmit loop are built on.
+(SubmitRejected, TaskLost) -- that split is what the workflow's retry
+policies and resubmit loop are built on.
 """
 
+import dataclasses
 import json
+from http import HTTPStatus
 
 import httpx
 import pytest
@@ -14,8 +16,16 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from orchestration.activities import DoclingActivities, format_of
-from orchestration.models import CollectOutputsInput, SubmitConversionInput
+from orchestration.models import (
+    CollectOutputsInput,
+    ErrorType,
+    SubmitConversionInput,
+    TaskCompleted,
+    TaskStatus,
+)
 from orchestration.tests.functional.fakes import FakeS3
+
+WORKFLOW_ID = "convert:docling-input/incoming/a.pdf"
 
 
 def _activities(settings, handler, s3=None) -> DoclingActivities:
@@ -25,21 +35,33 @@ def _activities(settings, handler, s3=None) -> DoclingActivities:
     return DoclingActivities(settings, http, s3 or FakeS3([]))
 
 
+def _env(workflow_id: str | None = WORKFLOW_ID) -> ActivityEnvironment:
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(env.info, workflow_id=workflow_id)
+    return env
+
+
 SUBMIT = SubmitConversionInput(
     bucket="docling-input", key="incoming/a.pdf", options={"to_formats": ["json", "md"]}
 )
 
 
-async def test_submit_sends_single_object_batch_and_returns_task_id(settings):
-    seen = {}
-
+def _capture_submit(seen: dict):
     def handler(request: httpx.Request) -> httpx.Response:
         seen["path"] = request.url.path
         seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"task_id": "t-1", "task_status": "pending"})
+        return httpx.Response(
+            HTTPStatus.OK, json={"task_id": "t-1", "task_status": "pending"}
+        )
 
-    task_id = await ActivityEnvironment().run(
-        _activities(settings, handler).submit_conversion, SUBMIT
+    return handler
+
+
+async def test_submit_sends_single_object_batch_and_returns_task_id(settings):
+    seen = {}
+
+    task_id = await _env().run(
+        _activities(settings, _capture_submit(seen)).submit_conversion, SUBMIT
     )
 
     assert task_id == "t-1"
@@ -56,13 +78,47 @@ async def test_submit_sends_single_object_batch_and_returns_task_id(settings):
     assert "convert_options" not in body
 
 
+async def test_submit_registers_callback_addressed_to_its_workflow(settings):
+    seen = {}
+
+    await _env().run(
+        _activities(settings, _capture_submit(seen)).submit_conversion, SUBMIT
+    )
+
+    assert seen["body"]["callbacks"] == [
+        {
+            # The relay unescapes this back into the workflow id it signals.
+            "url": "http://relay.test/v1/callbacks/convert%3Adocling-input%2Fincoming%2Fa.pdf",
+            "headers": {"X-Callback-Token": "tok"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("callback_base_url", "workflow_id"),
+    [(None, WORKFLOW_ID), ("http://relay.test", None)],
+    ids=["no-relay-configured", "not-run-by-a-workflow"],
+)
+async def test_submit_without_relay_or_workflow_registers_no_callback(
+    settings, callback_base_url, workflow_id
+):
+    settings = settings.model_copy(update={"callback_base_url": callback_base_url})
+    seen = {}
+
+    await _env(workflow_id).run(
+        _activities(settings, _capture_submit(seen)).submit_conversion, SUBMIT
+    )
+
+    assert seen["body"]["callbacks"] == []
+
+
 @pytest.mark.parametrize(
     ("status", "error_type", "retryable"),
     [
-        (429, "QueueFull", True),
-        (503, "UpstreamError", True),
-        (422, "SubmitRejected", False),
-        (400, "SubmitRejected", False),
+        (HTTPStatus.TOO_MANY_REQUESTS, ErrorType.QUEUE_FULL, True),
+        (HTTPStatus.SERVICE_UNAVAILABLE, ErrorType.UPSTREAM_ERROR, True),
+        (HTTPStatus.UNPROCESSABLE_ENTITY, ErrorType.SUBMIT_REJECTED, False),
+        (HTTPStatus.BAD_REQUEST, ErrorType.SUBMIT_REJECTED, False),
     ],
 )
 async def test_submit_classifies_upstream_errors(
@@ -71,86 +127,86 @@ async def test_submit_classifies_upstream_errors(
     acts = _activities(settings, lambda _: httpx.Response(status, text="nope"))
 
     with pytest.raises(ApplicationError) as exc:
-        await ActivityEnvironment().run(acts.submit_conversion, SUBMIT)
+        await _env().run(acts.submit_conversion, SUBMIT)
 
     assert exc.value.type == error_type
     assert exc.value.non_retryable is (not retryable)
 
 
-def _poll_then(statuses: list[dict], result: httpx.Response | None = None):
-    remaining = list(statuses)
-
+def _status(body: dict):
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.startswith("/v1/status/poll/"):
-            return httpx.Response(200, json=remaining.pop(0))
-        assert request.url.path == "/v1/result/t-1"
-        return result
+        assert request.url.path == "/v1/status/poll/t-1"
+        # A single poll: no server-side long-wait, the workflow sleeps instead.
+        assert "wait" not in request.url.params
+        return httpx.Response(HTTPStatus.OK, json=body)
 
     return handler
 
 
-async def test_wait_heartbeats_every_poll_and_returns_counts(settings):
-    handler = _poll_then(
-        [
-            {"task_status": "pending", "task_position": 3},
-            {"task_status": "started"},
-            {"task_status": "success"},
-        ],
-        httpx.Response(
-            200,
-            json={"num_succeeded": 1, "num_partially_succeeded": 0, "num_failed": 0},
-        ),
+@pytest.mark.parametrize("in_progress", ["pending", "started"])
+async def test_check_task_in_progress_is_none(settings, in_progress):
+    acts = _activities(settings, _status({"task_status": in_progress}))
+
+    assert await _env().run(acts.check_task, "t-1") is None
+
+
+async def test_check_task_success_is_completed(settings):
+    acts = _activities(settings, _status({"task_status": "success"}))
+
+    completed = await _env().run(acts.check_task, "t-1")
+
+    assert completed == TaskCompleted("t-1", TaskStatus.SUCCESS)
+
+
+async def test_check_task_failure_is_completed_with_docling_message(settings):
+    acts = _activities(
+        settings, _status({"task_status": "failure", "error_message": "bad pdf"})
     )
-    env = ActivityEnvironment()
-    beats: list = []
-    env.on_heartbeat = lambda *details: beats.append(details[0])
 
-    outcome = await env.run(_activities(settings, handler).wait_for_task, "t-1")
+    completed = await _env().run(acts.check_task, "t-1")
 
-    assert [b["task_status"] for b in beats] == ["pending", "started", "success"]
-    assert beats[0]["position"] == 3
-    assert (outcome.num_succeeded, outcome.num_failed) == (1, 0)
+    # A failed task isn't an activity error: the workflow decides, the same
+    # way it does for a failure reported by callback.
+    assert completed == TaskCompleted("t-1", TaskStatus.FAILURE, "bad pdf")
 
 
-async def test_wait_404_is_task_lost_and_not_retried_by_temporal(settings):
-    acts = _activities(settings, lambda _: httpx.Response(404))
+async def test_check_task_404_is_task_lost_and_not_retried_by_temporal(settings):
+    acts = _activities(settings, lambda _: httpx.Response(HTTPStatus.NOT_FOUND))
 
     with pytest.raises(ApplicationError) as exc:
-        await ActivityEnvironment().run(acts.wait_for_task, "t-1")
+        await _env().run(acts.check_task, "t-1")
 
-    assert exc.value.type == "TaskLost"
+    assert exc.value.type == ErrorType.TASK_LOST
     assert exc.value.non_retryable
 
 
-async def test_wait_failure_status_is_conversion_failed(settings):
-    handler = _poll_then([{"task_status": "failure", "error_message": "bad pdf"}])
+async def test_check_task_5xx_is_retryable(settings):
+    acts = _activities(settings, lambda _: httpx.Response(HTTPStatus.BAD_GATEWAY))
 
     with pytest.raises(ApplicationError) as exc:
-        await ActivityEnvironment().run(
-            _activities(settings, handler).wait_for_task, "t-1"
-        )
+        await _env().run(acts.check_task, "t-1")
 
-    assert exc.value.type == "ConversionFailed"
-    assert exc.value.non_retryable
-    assert "bad pdf" in str(exc.value)
-
-
-async def test_wait_5xx_while_polling_is_retryable(settings):
-    acts = _activities(settings, lambda _: httpx.Response(502))
-
-    with pytest.raises(ApplicationError) as exc:
-        await ActivityEnvironment().run(acts.wait_for_task, "t-1")
-
-    assert exc.value.type == "UpstreamError"
+    assert exc.value.type == ErrorType.UPSTREAM_ERROR
     assert not exc.value.non_retryable
 
 
-async def test_wait_success_with_expired_result_still_succeeds(settings):
-    handler = _poll_then([{"task_status": "success"}], httpx.Response(404))
+async def test_fetch_outcome_returns_per_document_counts(settings):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/result/t-1"
+        return httpx.Response(
+            HTTPStatus.OK,
+            json={"num_succeeded": 1, "num_partially_succeeded": 0, "num_failed": 0},
+        )
 
-    outcome = await ActivityEnvironment().run(
-        _activities(settings, handler).wait_for_task, "t-1"
-    )
+    outcome = await _env().run(_activities(settings, handler).fetch_outcome, "t-1")
+
+    assert (outcome.num_succeeded, outcome.num_failed) == (1, 0)
+
+
+async def test_fetch_outcome_with_expired_result_still_succeeds(settings):
+    acts = _activities(settings, lambda _: httpx.Response(HTTPStatus.NOT_FOUND))
+
+    outcome = await _env().run(acts.fetch_outcome, "t-1")
 
     assert outcome.num_succeeded is None
 
@@ -167,9 +223,11 @@ async def test_collect_lists_recursively_through_jobkit_hash_dir(settings):
         ],
         page_size=2,
     )
-    acts = _activities(settings, lambda _: httpx.Response(500), s3=s3)
+    acts = _activities(
+        settings, lambda _: httpx.Response(HTTPStatus.INTERNAL_SERVER_ERROR), s3=s3
+    )
 
-    collected = await ActivityEnvironment().run(
+    collected = await _env().run(
         acts.collect_outputs,
         CollectOutputsInput(bucket="docling-input", key="incoming/a.pdf"),
     )

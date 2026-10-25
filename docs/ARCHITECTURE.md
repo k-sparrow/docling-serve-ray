@@ -115,13 +115,16 @@ flowchart TB
         temporal["Temporal server :7233<br/>+ UI :8080"]
         pg[("Postgres<br/>workflow state")]
         worker["orchestration worker<br/>1 replica"]
+        relay["callback relay (Go)<br/>:8080, internal only"]
     end
 
     starter -- "start ConvertDocumentWorkflow<br/>per S3 object" --> temporal
     temporal --- pg
     worker -- "poll task queues" --> temporal
-    worker -- "convert/source/batch (serial),<br/>status/poll, result" --> docling
+    worker -- "convert/source/batch (serial, with callback),<br/>safety status/poll, result" --> docling
     worker -- "list outputs" --> minio
+    rayworker -- "task_completed callback" --> relay
+    relay -- "signal workflow" --> temporal
 
     client --> nginx
     nginx -- "the two upload routes<br/>plus the result route" --> facade
@@ -171,8 +174,16 @@ flowchart TB
   directly, not through nginx/the facade: its inputs are S3 coordinates,
   which `/v1/convert/source/batch` already handles without any document
   bytes in Redis, so the claim-check step has nothing to do. Temporal server
-  (Postgres-backed) + UI + one worker process; the worker joins the main
-  stack's network by name. See [the Temporal path](#request-flow-the-temporal-path).
+  (Postgres-backed) + UI + one worker process + the callback relay; the
+  worker and the relay join the main stack's network by name. See
+  [the Temporal path](#request-flow-the-temporal-path).
+- **Callback relay** (`src/callback_relay/`, Go) — receives docling-serve's
+  task-completion callbacks on `/v1/callbacks/{workflow id}` and turns each
+  into a `task_completed` signal for that workflow. Stateless: the URL names
+  the workflow and the payload names the task, so it keeps no lookup table and
+  can run several replicas. Checks a shared token on every callback. Built
+  with rules_go/gazelle and rules_oci onto `distroless/static` (a pure-Go
+  static binary, no shell).
 
 ## Request flow: the claim-check path
 
@@ -229,27 +240,34 @@ sequenceDiagram
     participant T as Temporal
     participant WS as worker: docling-submit queue (1 slot)
     participant WM as worker: docling queue
-    participant D as docling-serve
+    participant D as docling-serve + Ray
+    participant R as callback relay
     participant S3 as MinIO
 
     CLI->>T: start workflow id convert:{bucket}/{key}
     Note over CLI,T: already running? rejected, not converted twice
     T->>WS: submit_conversion
-    WS->>D: POST convert/source/batch (S3 source, S3 target)
+    WS->>D: POST convert/source/batch (S3 source, S3 target,<br/>callback /v1/callbacks/{workflow id})
     alt queue full
         D-->>WS: 429
         Note over T,WS: retried with backoff, slot freed between attempts
     end
     D-->>WS: task_id
-    T->>WM: wait_for_task(task_id)
-    loop until terminal
-        WM->>D: GET status/poll?wait=30
-        WM-->>T: heartbeat
+    Note over T: workflow sleeps on a durable timer (~5 min ±20%),<br/>no worker slot held
+    alt callback delivered (the common case)
+        D->>R: POST task_completed {task_id, task_status}
+        R->>T: SignalWorkflow(task_completed)
+        Note over T: timer cancelled, workflow wakes within seconds
+    else no signal before the timer fires (callback late or lost)
+        T->>WM: check_task(task_id): one status poll
+        WM->>D: GET status/poll
+        Note over T,WM: still in progress: poll counted, back to sleep,<br/>up to max_safety_polls (600, ~50h)
     end
-    Note over T,WM: worker dies: heartbeat timeout, retried on a live worker,<br/>polling the SAME task_id
-    alt 404 (docling lost the task)
+    Note over T,R: no worker running when the signal lands?<br/>it waits in history, acted on after restart
+    alt 404 on a safety poll (docling lost the task)
         WM-->>T: TaskLost, workflow resubmits (max 4 submissions)
     end
+    T->>WM: fetch_outcome
     WM->>D: GET result (per-document counts)
     T->>WM: collect_outputs
     WM->>S3: list temporal/{bucket}/{key}/convert/ recursively
@@ -265,9 +283,20 @@ Properties worth knowing:
   (measured: a 20-document burst peaked at exactly 8 queued + 2 active, with
   every 429 absorbed as a retried submit). **Run exactly one worker
   replica**: the limit is per process.
-- **Resume, don't resubmit.** The wait step's only input is the docling
-  task id, so a retry after a crash polls the same task. Verified by
-  SIGKILLing the worker mid-poll (`tests/temporal/`).
+- **Sleep until called back, poll as a safety net.** Waiting is a durable
+  timer, not a running activity: a document that spends hours queued and
+  converting holds no worker slot. docling-serve's callback reaches the relay,
+  which signals the workflow; jobkit sends it from a background thread with 3
+  attempts over about 3 s and stores nothing, so the workflow polls once each
+  time its jittered timer runs out without a signal. A poll that finds the
+  task in progress counts against `max_safety_polls`; one docling-serve can't
+  answer (3 quick attempts) counts too, and the workflow sleeps again, still
+  wakeable by a callback.
+- **Resume, don't resubmit.** The timer and any signal live in the
+  workflow's history on the server, so a worker restart resumes the wait on
+  the same docling task. Verified by SIGKILLing the worker right after
+  submit, letting docling call back while no worker runs, and restarting it
+  (`tests/temporal/`).
 - **At-least-once submits.** docling-serve has no idempotency key: a crash
   between the POST landing and the activity completing means one duplicate
   conversion into the same per-document prefix (costs GPU time, corrupts
@@ -279,9 +308,11 @@ Properties worth knowing:
 - **Always emits DoclingDocument JSON**, whatever formats are requested —
   it's what a chained chunking step re-ingests (`from_formats=["json_docling"]`)
   without re-running the conversion pipeline.
-- **No secrets in workflow history.** S3 credentials and endpoints come from
-  the worker's `ORCH_*` env; workflow inputs are only bucket, key and
-  conversion options.
+- **No secrets in workflow history.** S3 credentials, endpoints and the
+  callback token come from the worker's `ORCH_*` env; workflow inputs are
+  only bucket, key, conversion options and the safety-poll knobs. The token
+  does reach docling-serve's Redis task records (it's sent with each
+  submit), which is why the relay is never published to the host.
 
 ## Testing
 
@@ -292,9 +323,10 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
 
 - **`bazel test //...`** — container structure tests (build each OCI image,
   assert on its filesystem/entrypoint via `container_structure_test`'s tar
-  driver, no daemon needed), the facade's pytest unit suite, and
-  `//tools/format:format_test` (formatting check, see below). All hermetic,
-  runs on every commit locally and in CI.
+  driver, no daemon needed), the Python and Go unit suites,
+  `//tools/format:format_test` (formatting check, see below) and
+  `//:gazelle_test` (Go BUILD files match the sources). All hermetic, runs
+  on every commit locally and in CI.
 - **`bazel test //:test.docker`** — the patch-import check (proves the Ray
   pickling fix is actually the code that gets *imported* at runtime, not
   just present in the tarball — a real, distinct failure mode from a plain
@@ -314,12 +346,19 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
   proves the routing itself (hitting everything through nginx, the only path
   a real client would use).
 - **Orchestration**: `src/orchestration/tests/functional/` covers activity
-  failure classification (mocked docling-serve) and workflow logic in
-  Temporal's time-skipping test server — pinned by sha256 in `MODULE.bazel`,
-  never downloaded at test time. `tests/temporal/` runs both real stacks
-  (backend + Temporal) and includes the worker-SIGKILL resume test.
+  failure classification (mocked docling-serve), request bodies checked
+  against docling-serve's own request models (`docling-slim`, test-only), and
+  workflow logic in Temporal's time-skipping test server — pinned by sha256
+  in `MODULE.bazel`, never downloaded at test time. Callbacks there are sent
+  as the relay's raw JSON, pinning the signal contract from the Python side;
+  `src/callback_relay/relay` pins it from the Go side. `tests/temporal/` runs
+  both real stacks (backend + Temporal + relay), one test per way a workflow
+  is woken: the callback, the safety poll with the relay down, and a callback
+  landing while no worker runs.
 - **Formatting and linting** — ruff (Python), buildifier (Starlark), yamlfmt
-  (YAML), and a ruff lint aspect, mirroring Artemis's own convention:
+  (YAML), gofumpt (Go), and a ruff lint aspect, mirroring Artemis's own
+  convention. Go has no separate lint step: nogo runs `go vet` inside every
+  Go compile, so a finding fails the build.
 
   ```bash
   bazel run //:format                                   # auto-fix in place
@@ -331,21 +370,25 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
 
 ## Deployment
 
-- **Bazel/rules_oci** — reproducible builds for all four custom images
-  (patched `docling-serve`, `facade`, `nginx`, the orchestration worker),
-  each pinned to its upstream base by digest in `MODULE.bazel`.
-  `bazel run //:load.all` builds and loads all four into the local Docker
-  daemon in one command.
+- **Bazel/rules_oci** — reproducible builds for all five custom images
+  (patched `docling-serve`, `facade`, `nginx`, the orchestration worker, the
+  callback relay), each pinned to its upstream base by digest in
+  `MODULE.bazel`. `bazel run //:load.all` builds and loads all five into the
+  local Docker daemon in one command. The relay follows rules_oci's Go guide:
+  a gazelle-generated `go_binary` (Go toolchain and modules from the root
+  `go.mod`, fetched hermetically) in a `tar` layer on `distroless/static`,
+  built through a linux/amd64 platform transition.
 - **Temporal stack** — `docker compose -f src/orchestration/docker-compose.yml up -d`,
-  after the main stack (the worker joins its network). Official
+  after the main stack (the worker and the relay join its network). Official
   `temporalio/{server,admin-tools,ui}` + `postgres` images pinned by digest;
   schema setup and namespace creation are idempotent one-shots. Host ports
   bind to localhost and are overridable (`TEMPORAL_HOST_PORT`,
   `TEMPORAL_UI_HOST_PORT`) for machines already running another Temporal.
-- **`Containerfile` fallbacks** — each image also has a plain
-  `docker build`-able `Containerfile` next to its own `BUILD.bazel`
-  (`src/patches/docling_serve/Containerfile`,
-  `src/facade/Containerfile`), for anyone iterating without Bazel set up.
+- **`Containerfile` fallbacks** — the Python-era images also have a plain
+  `docker build`-able `Containerfile` next to their own `BUILD.bazel`
+  (`src/patches/docling_serve/Containerfile`, `src/facade/Containerfile`,
+  `src/orchestration/Containerfile`), for anyone iterating without Bazel set
+  up. The callback relay is built by Bazel only.
 - **`docker compose up`** — brings up the full stack against the locally
   loaded/built images: MinIO, Redis, ray-head/ray-worker, `docling-serve`,
   `facade`, `nginx`. Only `nginx` (`5001`) and MinIO (`9000`/`9001`, for
@@ -357,8 +400,8 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
     above) runs first and gates `test` (`bazel test //...`) and
     `test-docker` (the Docker-dependent suite, CPU-only), which then run in
     parallel with each other. On push to `main`, once all three pass, also
-    pushes the four production images to GHCR as `:latest`
-    (`ghcr.io/k-sparrow/docling-serve-ray-{patched,facade,nginx,orchestration}`). The
+    pushes the five production images to GHCR as `:latest`
+    (`ghcr.io/k-sparrow/docling-serve-ray-{patched,facade,nginx,orchestration,callback-relay}`). The
     CI-only CPU-patched image variant is never pushed — it's test
     infrastructure, not a deployable artifact.
   - `nightly-docker-tests.yml` — the same Docker-dependent suite again, on an

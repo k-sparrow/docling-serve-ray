@@ -3,4 +3,15 @@
 # -------------------------------------
 #
 
+load("@rules_go//go:def.bzl", "nogo")
+
 exports_files(["linters.bzl"])
+
+# Wired into every Go compile via MODULE.bazel's go_sdk.nogo(): `go vet`'s
+# default analyzer set, applied to this repo's own packages only (rules_go's
+# default scope -- third-party modules aren't vetted).
+nogo(
+    name = "nogo",
+    vet = True,
+    visibility = ["//visibility:public"],
+)

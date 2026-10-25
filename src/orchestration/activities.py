@@ -8,14 +8,18 @@ retries on its own and what the workflow has to handle:
     queue-limit backpressure, not an error.
   - SubmitRejected (any other 4xx): non-retryable -- a malformed request
     won't succeed on attempt 2.
-  - TaskLost (404 while polling): non-retryable here, handled by the
+  - TaskLost (404 on a status check): non-retryable here, handled by the
     workflow, which resubmits. docling-serve forgot the task (Redis flushed,
-    results TTL elapsed, state lost) -- polling the same id again can't help.
-  - ConversionFailed: non-retryable -- docling ran the document and it
-    failed.
+    results TTL elapsed, state lost) -- asking about the same id again can't
+    help.
+
+A task that ran and failed isn't an activity error at all: check_task reports
+it as a TaskCompleted, the same shape the callback relay's signal carries, and
+the workflow fails with ConversionFailed whichever path told it.
 """
 
 import asyncio
+from http import HTTPStatus
 from typing import Any
 
 import httpx
@@ -25,14 +29,18 @@ from temporalio.exceptions import ApplicationError
 from orchestration.config import Settings
 from orchestration.docling_client import (
     build_batch_convert_body,
+    callback_specs,
     convert_output_prefix,
     tenant_headers,
 )
 from orchestration.models import (
     CollectedOutputs,
     CollectOutputsInput,
+    ErrorType,
     SubmitConversionInput,
+    TaskCompleted,
     TaskOutcome,
+    TaskStatus,
 )
 
 # Longest suffix first: ".doctags.txt" and ".chunks.jsonl" would otherwise
@@ -47,9 +55,6 @@ _SUFFIX_TO_FORMAT: list[tuple[str, str]] = [
     (".txt", "text"),
 ]
 
-_TERMINAL_SUCCESS = "success"
-_TERMINAL_FAILURE = "failure"
-
 
 def format_of(key: str) -> str:
     for suffix, fmt in _SUFFIX_TO_FORMAT:
@@ -59,14 +64,14 @@ def format_of(key: str) -> str:
 
 
 def _raise_for_upstream_status(response: httpx.Response, *, action: str) -> None:
-    if response.status_code < 400:
+    if not response.is_error:
         return
     detail = f"{action}: HTTP {response.status_code}: {response.text[:500]}"
-    if response.status_code == 429:
-        raise ApplicationError(detail, type="QueueFull")
-    if response.status_code >= 500:
-        raise ApplicationError(detail, type="UpstreamError")
-    raise ApplicationError(detail, type="SubmitRejected", non_retryable=True)
+    if response.status_code == HTTPStatus.TOO_MANY_REQUESTS:
+        raise ApplicationError(detail, type=ErrorType.QUEUE_FULL)
+    if response.is_server_error:
+        raise ApplicationError(detail, type=ErrorType.UPSTREAM_ERROR)
+    raise ApplicationError(detail, type=ErrorType.SUBMIT_REJECTED, non_retryable=True)
 
 
 class DoclingActivities:
@@ -81,7 +86,11 @@ class DoclingActivities:
     @activity.defn
     async def submit_conversion(self, inp: SubmitConversionInput) -> str:
         body = build_batch_convert_body(
-            self._settings, bucket=inp.bucket, key=inp.key, options=inp.options
+            self._settings,
+            bucket=inp.bucket,
+            key=inp.key,
+            options=inp.options,
+            callbacks=callback_specs(self._settings, activity.info().workflow_id),
         )
         response = await self._http.post(
             "/v1/convert/source/batch",
@@ -96,47 +105,35 @@ class DoclingActivities:
         return task_id
 
     @activity.defn
-    async def wait_for_task(self, task_id: str) -> TaskOutcome:
-        """Long-polls until the task is terminal, heartbeating once per poll.
-
-        Safe to retry from scratch: its only input is the task id, so a retry
-        after a worker crash (heartbeat timeout) resumes polling the same
-        docling task rather than resubmitting anything.
-        """
-        wait = self._settings.status_poll_wait_seconds
-        headers = tenant_headers(self._settings)
-        while True:
-            response = await self._http.get(
-                f"/v1/status/poll/{task_id}",
-                params={"wait": wait},
-                headers=headers,
-                timeout=wait + 30.0,
+    async def check_task(self, task_id: str) -> TaskCompleted | None:
+        """One status poll, no server-side wait: the workflow's safety net
+        for a callback that's late or never comes. None while the task is
+        still queued or running."""
+        response = await self._http.get(
+            f"/v1/status/poll/{task_id}", headers=tenant_headers(self._settings)
+        )
+        if response.status_code == HTTPStatus.NOT_FOUND:
+            raise ApplicationError(
+                f"docling-serve no longer knows task {task_id}",
+                type=ErrorType.TASK_LOST,
+                non_retryable=True,
             )
-            if response.status_code == 404:
-                raise ApplicationError(
-                    f"docling-serve no longer knows task {task_id}",
-                    type="TaskLost",
-                    non_retryable=True,
-                )
-            _raise_for_upstream_status(response, action="status poll")
-            status = response.json()
-            task_status = status["task_status"]
-            activity.heartbeat(
-                {"task_status": task_status, "position": status.get("task_position")}
-            )
-            if task_status == _TERMINAL_FAILURE:
-                raise ApplicationError(
-                    f"task {task_id} failed: {status.get('error_message')}",
-                    status.get("failure"),
-                    type="ConversionFailed",
-                    non_retryable=True,
-                )
-            if task_status == _TERMINAL_SUCCESS:
-                return await self._outcome(task_id, headers)
+        _raise_for_upstream_status(response, action="status poll")
+        status = response.json()
+        if status["task_status"] not in set(TaskStatus):
+            return None
+        return TaskCompleted(
+            task_id=task_id,
+            task_status=TaskStatus(status["task_status"]),
+            error_message=status.get("error_message"),
+        )
 
-    async def _outcome(self, task_id: str, headers: dict[str, str]) -> TaskOutcome:
-        response = await self._http.get(f"/v1/result/{task_id}", headers=headers)
-        if response.status_code == 404:
+    @activity.defn
+    async def fetch_outcome(self, task_id: str) -> TaskOutcome:
+        response = await self._http.get(
+            f"/v1/result/{task_id}", headers=tenant_headers(self._settings)
+        )
+        if response.status_code == HTTPStatus.NOT_FOUND:
             activity.logger.warning("result for %s already expired", task_id)
             return TaskOutcome(task_id, None, None, None)
         _raise_for_upstream_status(response, action="result fetch")

@@ -6,8 +6,11 @@ inputs here are objects already sitting in S3.
 """
 
 from typing import Any
+from urllib.parse import quote
 
 from orchestration.config import Settings
+
+CALLBACK_TOKEN_HEADER = "X-Callback-Token"
 
 
 def convert_output_prefix(settings: Settings, bucket: str, key: str) -> str:
@@ -30,8 +33,29 @@ def _s3_coords(settings: Settings, bucket: str, key_prefix: str) -> dict[str, An
     }
 
 
+def callback_specs(settings: Settings, workflow_id: str | None) -> list[dict[str, Any]]:
+    """Where docling-serve reports the task's completion. The workflow id
+    rides in the URL, so the relay can signal the right workflow without a
+    lookup table; escaped, since it contains '/' and ':'. No relay
+    configured, or no workflow to signal: no callback."""
+    if not settings.callback_base_url or not workflow_id:
+        return []
+    base = settings.callback_base_url.rstrip("/")
+    return [
+        {
+            "url": f"{base}/v1/callbacks/{quote(workflow_id, safe='')}",
+            "headers": {CALLBACK_TOKEN_HEADER: settings.callback_token},
+        }
+    ]
+
+
 def build_batch_convert_body(
-    settings: Settings, *, bucket: str, key: str, options: dict[str, Any]
+    settings: Settings,
+    *,
+    bucket: str,
+    key: str,
+    options: dict[str, Any],
+    callbacks: list[dict[str, Any]],
 ) -> dict[str, Any]:
     # key_prefix is a prefix match, not an exact key: the object's full key
     # also matches any sibling that merely extends it (`a.pdf` vs
@@ -49,6 +73,7 @@ def build_batch_convert_body(
         # (falling back to to_formats=["md"]) rather than rejected. See the
         # matching note in src/facade/service.py.
         "options": options,
+        "callbacks": callbacks,
     }
 
 
