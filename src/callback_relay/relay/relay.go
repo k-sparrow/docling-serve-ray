@@ -87,13 +87,17 @@ type handler struct {
 }
 
 func (h *handler) callback(w http.ResponseWriter, r *http.Request) {
-	if len(h.token) == 0 || subtle.ConstantTimeCompare([]byte(r.Header.Get(TokenHeader)), h.token) != 1 {
-		http.Error(w, "invalid callback token", http.StatusUnauthorized)
-		return
-	}
 	// ServeMux matches and unescapes per segment, so the %2F-escaped
 	// slashes of a `convert:{bucket}/{key}` id stay inside this one value.
 	workflowID := r.PathValue("workflowID")
+	if len(h.token) == 0 || subtle.ConstantTimeCompare([]byte(r.Header.Get(TokenHeader)), h.token) != 1 {
+		// Logged because nothing else would show it: a token that differs
+		// from the worker's silently leaves every workflow to its safety
+		// polls.
+		h.logger.Warn("rejected callback with an invalid token", "workflow_id", workflowID)
+		http.Error(w, "invalid callback token", http.StatusUnauthorized)
+		return
+	}
 
 	var cb progressCallback
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&cb); err != nil {

@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -137,6 +138,26 @@ func TestRejectsCallbacksWithoutTheToken(t *testing.T) {
 				t.Errorf("signaled %d times, want 0", len(f.signals))
 			}
 		})
+	}
+}
+
+func TestRejectedCallbacksAreLogged(t *testing.T) {
+	var logs bytes.Buffer
+	req := httptest.NewRequest(http.MethodPost, callbackPath, strings.NewReader(`{}`))
+	req.Header.Set(relay.TokenHeader, "guess")
+	rec := httptest.NewRecorder()
+
+	relay.NewHandler(&fakeSignaler{}, token, slog.New(slog.NewJSONHandler(&logs, nil))).ServeHTTP(rec, req)
+
+	var entry map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+		t.Fatalf("want one JSON log line, got %q: %v", logs.String(), err)
+	}
+	if entry["level"] != "WARN" || entry["workflow_id"] != "convert:docling-input/incoming/a b.pdf" {
+		t.Errorf("got log %v", entry)
+	}
+	if strings.Contains(logs.String(), "guess") {
+		t.Error("the presented token was logged")
 	}
 }
 

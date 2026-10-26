@@ -44,17 +44,16 @@ func main() {
 		"probe this relay's /healthz and exit 0 if it answers -- the container healthcheck, since the image has no shell or curl")
 	flag.Parse()
 
-	listenAddr := envOr("RELAY_LISTEN_ADDR", ":8080")
 	if *healthcheck {
-		os.Exit(probe(listenAddr))
+		// Needs only the port, so it works without the rest of the config.
+		os.Exit(probe(listenAddr(os.Getenv)))
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	cfg := config{
-		listenAddr:        listenAddr,
-		temporalAddress:   envOr("RELAY_TEMPORAL_ADDRESS", "localhost:7233"),
-		temporalNamespace: envOr("RELAY_TEMPORAL_NAMESPACE", "default"),
-		callbackToken:     os.Getenv("RELAY_CALLBACK_TOKEN"),
+	cfg, err := loadConfig(os.Getenv)
+	if err != nil {
+		logger.Error("invalid configuration", "error", err)
+		os.Exit(1)
 	}
 	if err := run(cfg, logger); err != nil {
 		logger.Error("callback relay stopped", "error", err)
@@ -62,10 +61,27 @@ func main() {
 	}
 }
 
-func run(cfg config, logger *slog.Logger) error {
-	if cfg.callbackToken == "" {
-		return errors.New("RELAY_CALLBACK_TOKEN must be set (the worker's ORCH_CALLBACK_TOKEN)")
+// loadConfig reads the configuration through getenv (os.Getenv outside
+// tests). Without a callback token the relay would reject every callback,
+// so that's an error rather than a relay that silently does nothing.
+func loadConfig(getenv func(string) string) (config, error) {
+	cfg := config{
+		listenAddr:        listenAddr(getenv),
+		temporalAddress:   valueOr(getenv, "RELAY_TEMPORAL_ADDRESS", "localhost:7233"),
+		temporalNamespace: valueOr(getenv, "RELAY_TEMPORAL_NAMESPACE", "default"),
+		callbackToken:     getenv("RELAY_CALLBACK_TOKEN"),
 	}
+	if cfg.callbackToken == "" {
+		return config{}, errors.New("RELAY_CALLBACK_TOKEN must be set (the worker's ORCH_CALLBACK_TOKEN)")
+	}
+	return cfg, nil
+}
+
+func listenAddr(getenv func(string) string) string {
+	return valueOr(getenv, "RELAY_LISTEN_ADDR", ":8080")
+}
+
+func run(cfg config, logger *slog.Logger) error {
 	temporal, err := client.Dial(client.Options{
 		HostPort:  cfg.temporalAddress,
 		Namespace: cfg.temporalNamespace,
@@ -123,8 +139,8 @@ func probe(listenAddr string) int {
 	return 0
 }
 
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+func valueOr(getenv func(string) string, key, fallback string) string {
+	if v := getenv(key); v != "" {
 		return v
 	}
 	return fallback
