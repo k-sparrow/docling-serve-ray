@@ -165,6 +165,9 @@ services:
     # non-atomic queue counter honest (see src/orchestration/models.py).
     deploy:
       replicas: 1
+    # Room for both of the worker's shutdowns (worker.py GRACEFUL_SHUTDOWN,
+    # 2 x 10s) before Docker sends SIGKILL; its default is 10s.
+    stop_grace_period: 30s
     environment:
       ORCH_TEMPORAL_ADDRESS: temporal:7233
       ORCH_DOCLING_SERVE_URL: http://docling-serve:5001
