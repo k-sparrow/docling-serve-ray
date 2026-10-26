@@ -19,5 +19,41 @@ fileExistenceTests:
     path: "/src/orchestration/worker.runfiles/rules_python++pip+pip_312_temporalio/site-packages/temporalio/bridge/temporal_sdk_bridge.abi3.so"
     shouldExist: true
 
+  # The one Python in the image: rules_python's hermetic interpreter, carried
+  # in the runfiles. The Ubuntu base has none of its own.
+  - name: "hermetic interpreter is baked in"
+    path: "/src/orchestration/worker.runfiles/rules_python++python+python_3_12_x86_64-unknown-linux-gnu/bin/python3"
+    shouldExist: true
+
+  # The launcher creates the binary's venv inside the runfiles on every
+  # start, as the image's non-root user -- who must therefore own them.
+  - name: "runfiles are owned by the ubuntu user"
+    path: "/src/orchestration/worker.runfiles"
+    shouldExist: true
+    uid: 1000
+    gid: 1000
+
+  - name: "no system python"
+    path: "/usr/bin/python3"
+    shouldExist: false
+
+  - name: "no system python (/usr/local)"
+    path: "/usr/local/bin/python3"
+    shouldExist: false
+
+commandTests:
+  # Starts the real entrypoint -- bash launcher, venv creation, hermetic
+  # interpreter, every import (temporalio's native bridge included) -- and
+  # stops at settings validation, before any connection attempt, so no
+  # Temporal is needed.
+  - name: "worker starts and validates its settings"
+    command: "/src/orchestration/worker"
+    envVars:
+      - key: "ORCH_CHECK_TASK_START_TO_CLOSE_SECONDS"
+        value: "0"
+    exitCode: 1
+    expectedError: ["check_task_start_to_close_seconds\\s+Input should be greater than 0"]
+
 metadataTest:
   entrypoint: ["/src/orchestration/worker"]
+  user: "ubuntu"

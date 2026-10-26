@@ -154,8 +154,7 @@ services:
       - docling
 
   worker:
-    # Built via `bazel run //src/orchestration:tarball`. Containerfile
-    # fallback: `docker build -f src/orchestration/Containerfile -t docling-serve-ray-orchestration .`
+    # Built via `bazel run //src/orchestration:tarball` (Bazel only).
     image: docling-serve-ray-orchestration:latest
     depends_on:
       temporal-namespace:

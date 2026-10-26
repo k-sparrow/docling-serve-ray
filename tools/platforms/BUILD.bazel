@@ -1,0 +1,16 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+# Target platform for Python images: every base image is pulled for
+# linux/amd64 only (MODULE.bazel), so their py_image_layer layers and images
+# are built for it whatever the host.
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    visibility = ["//:__subpackages__"],
+)

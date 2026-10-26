@@ -9,7 +9,7 @@ module(
     compatibility_level = 1,
 )
 
-bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "tar.bzl", version = "0.9.0")
@@ -64,6 +64,17 @@ pip.parse(
     requirements_lock = "//:requirements_lock.txt",
 )
 use_repo(pip, "pip")
+
+# py_binary + py_image_layer for Python images, the pattern rules_oci's Python
+# guide points to (aspect-build/bazel-examples/oci_python_image) and Artemis
+# uses: the binary runs from a venv over rules_python's hermetic interpreter
+# and @pip's wheels, and the image gets it as separate interpreter /
+# site-packages / app layers. Used by the orchestration worker
+# (src/orchestration); rules_python stays the toolchain and pip provider.
+# 1.8.4, as in Artemis, is the newest that loads on our Bazel 8.0.1 (checked):
+# 1.8.5+ declare toolchains with use_target_platform_constraints, and
+# 1.11.5+ also call repository_ctx.repo_metadata, both newer than 8.0.1.
+bazel_dep(name = "aspect_rules_py", version = "1.8.4")
 
 # ------------------ GO ------------------------------------------------------
 # The callback relay (src/callback_relay). The root go.mod is the single
@@ -126,6 +137,21 @@ oci.pull(
     tag = "3.12-slim",
 )
 use_repo(oci, "python_3_12_slim", "python_3_12_slim_linux_amd64")
+
+# Base for the orchestration worker, as in Artemis: the image needs no Python
+# of its own -- the py_binary's runfiles carry rules_python's hermetic
+# interpreter -- only glibc, plus bash and coreutils for the py_binary's
+# launcher (rules_python's script bootstrap, see .bazelrc), which rules out
+# distroless. Pinned to the 24.04 tag explicitly so a digest bump can't
+# silently cross into another LTS release.
+oci.pull(
+    name = "ubuntu",
+    digest = "sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac",
+    image = "docker.io/library/ubuntu",
+    platforms = ["linux/amd64"],
+    tag = "24.04",
+)
+use_repo(oci, "ubuntu", "ubuntu_linux_amd64")
 oci.pull(
     name = "nginx_alpine",
     digest = "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",
