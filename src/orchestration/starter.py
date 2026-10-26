@@ -18,14 +18,13 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from orchestration.config import get_settings
+from orchestration.dispatch import start_conversion
 from orchestration.models import (
     DEFAULT_TO_FORMATS,
-    TASK_QUEUE,
     ConvertInput,
     ConvertResult,
     workflow_id_for_convert,
 )
-from orchestration.workflows import ConvertDocumentWorkflow
 
 
 def _list_objects(s3, bucket: str, prefix: str) -> list[str]:
@@ -63,11 +62,8 @@ async def _convert(args: argparse.Namespace) -> int:
     for key in keys:
         workflow_id = workflow_id_for_convert(args.bucket, key)
         try:
-            handles[key] = await client.start_workflow(
-                ConvertDocumentWorkflow.run,
-                ConvertInput(bucket=args.bucket, key=key, to_formats=to_formats),
-                id=workflow_id,
-                task_queue=TASK_QUEUE,
+            handles[key] = await start_conversion(
+                client, ConvertInput(bucket=args.bucket, key=key, to_formats=to_formats)
             )
             started += 1
             print(f"started          {workflow_id}")

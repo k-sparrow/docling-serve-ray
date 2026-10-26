@@ -17,7 +17,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from orchestration.activities import DoclingActivities
-from orchestration.config import get_settings
+from orchestration.config import Settings, get_settings
 from orchestration.models import SUBMIT_TASK_QUEUE, TASK_QUEUE
 from orchestration.workflows import ConvertDocumentWorkflow
 
@@ -27,6 +27,30 @@ from orchestration.workflows import ConvertDocumentWorkflow
 # down one after the other, so a stop can take twice this:
 # docker-compose.yml's stop_grace_period covers that before Docker kills.
 GRACEFUL_SHUTDOWN = timedelta(seconds=10)
+
+
+def build_workers(
+    client: Client, acts: DoclingActivities, settings: Settings
+) -> tuple[Worker, Worker]:
+    """The process's two workers: the main queue (the workflow, status
+    checks, results, output listing) and the submit queue, whose single
+    activity slot is what serializes submits across every workflow."""
+    main = Worker(
+        client,
+        task_queue=TASK_QUEUE,
+        workflows=[ConvertDocumentWorkflow],
+        activities=[acts.check_task, acts.fetch_outcome, acts.collect_outputs],
+        max_concurrent_activities=settings.max_concurrent_activities,
+        graceful_shutdown_timeout=GRACEFUL_SHUTDOWN,
+    )
+    submit = Worker(
+        client,
+        task_queue=SUBMIT_TASK_QUEUE,
+        activities=[acts.submit_conversion],
+        max_concurrent_activities=1,
+        graceful_shutdown_timeout=GRACEFUL_SHUTDOWN,
+    )
+    return main, submit
 
 
 async def run() -> None:
@@ -48,21 +72,8 @@ async def run() -> None:
     async with httpx.AsyncClient(
         base_url=settings.docling_serve_url, timeout=60.0
     ) as http:
-        acts = DoclingActivities(settings, http, s3)
-        main = Worker(
-            client,
-            task_queue=TASK_QUEUE,
-            workflows=[ConvertDocumentWorkflow],
-            activities=[acts.check_task, acts.fetch_outcome, acts.collect_outputs],
-            max_concurrent_activities=settings.max_concurrent_activities,
-            graceful_shutdown_timeout=GRACEFUL_SHUTDOWN,
-        )
-        submit = Worker(
-            client,
-            task_queue=SUBMIT_TASK_QUEUE,
-            activities=[acts.submit_conversion],
-            max_concurrent_activities=1,
-            graceful_shutdown_timeout=GRACEFUL_SHUTDOWN,
+        main, submit = build_workers(
+            client, DoclingActivities(settings, http, s3), settings
         )
         async with main, submit:
             logging.info(

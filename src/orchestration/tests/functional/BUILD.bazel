@@ -19,6 +19,8 @@ py_library(
     visibility = ["//src/orchestration/tests/functional:__subpackages__"],
     deps = [
         "//src/orchestration:orchestration_lib",
+        "//src/orchestration:worker_lib",
+        requirement("httpx"),
         requirement("pytest"),
         requirement("pytest-asyncio"),
     ],
@@ -53,6 +55,32 @@ py_test(
     srcs = ["test_workflows.py"],
     # The time-skipping test server MODULE.bazel pins by sha256 -- passed in
     # by path so the SDK never downloads one at test time (see conftest.py).
+    data = ["@temporal_test_server//:temporal-test-server"],
+    env = {"TEMPORAL_TEST_SERVER": "$(rootpath @temporal_test_server//:temporal-test-server)"},
+    imports = ["../../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//src/orchestration:orchestration_lib",
+    ],
+)
+
+py_test(
+    name = "test_worker",
+    srcs = ["test_worker.py"],
+    data = ["@temporal_test_server//:temporal-test-server"],
+    env = {"TEMPORAL_TEST_SERVER": "$(rootpath @temporal_test_server//:temporal-test-server)"},
+    imports = ["../../../"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//src/orchestration:orchestration_lib",
+    ],
+)
+
+py_test(
+    name = "test_dispatch",
+    srcs = ["test_dispatch.py"],
     data = ["@temporal_test_server//:temporal-test-server"],
     env = {"TEMPORAL_TEST_SERVER": "$(rootpath @temporal_test_server//:temporal-test-server)"},
     imports = ["../../../"],

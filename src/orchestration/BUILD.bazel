@@ -27,6 +27,7 @@ py_library(
         "__init__.py",
         "activities.py",
         "config.py",
+        "dispatch.py",
         "docling_client.py",
         "models.py",
         "workflows.py",
@@ -39,15 +40,22 @@ py_library(
     ],
 )
 
+py_library(
+    name = "worker_lib",
+    srcs = ["worker.py"],
+    imports = [".."],
+    deps = [
+        ":orchestration_lib",
+        requirement("boto3"),
+    ],
+)
+
 py_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = [".."],
     main = "worker.py",
-    deps = [
-        ":orchestration_lib",
-        requirement("boto3"),
-    ],
+    deps = [":worker_lib"],
 )
 
 py_binary(

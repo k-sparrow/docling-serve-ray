@@ -11,11 +11,16 @@ import shutil
 import stat
 from pathlib import Path
 
+import httpx
 import pytest
 import pytest_asyncio
 from temporalio.testing import WorkflowEnvironment
 
+from orchestration.activities import DoclingActivities
 from orchestration.config import Settings
+from orchestration.docling_client import convert_output_prefix
+from orchestration.tests.functional.fakes import FakeS3
+from orchestration.worker import build_workers
 
 
 @pytest.fixture
@@ -54,3 +59,26 @@ async def workflow_env(test_server_path):
         yield env
     finally:
         await env.shutdown()
+
+
+@pytest.fixture
+def real_workers(workflow_env, settings):
+    """worker.build_workers' two workers -- the deployed process's exact
+    setup -- running the real activities against a FakeDocling, with a json
+    output in (fake) S3 for each of `keys` in `bucket`."""
+
+    def build(docling, bucket: str, keys: list[str]):
+        http = httpx.AsyncClient(
+            base_url=settings.docling_serve_url, transport=httpx.MockTransport(docling)
+        )
+        s3 = FakeS3(
+            [
+                f"{convert_output_prefix(settings, bucket, key)}h/{key}.json"
+                for key in keys
+            ]
+        )
+        return build_workers(
+            workflow_env.client, DoclingActivities(settings, http, s3), settings
+        )
+
+    return build
