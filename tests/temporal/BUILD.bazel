@@ -23,13 +23,18 @@ py_library(
 py_test(
     name = "test_temporal_orchestration",
     # Bringing both stacks up from cold (models loading on CPU in CI) plus
-    # three real conversions, one of them OCR-bound on purpose, runs past
-    # the default 300s timeout -- the CI failure this used to hit was the
-    # teardown being killed after every test had already passed.
+    # a dozen real conversions, some OCR-bound on purpose, and restarts of
+    # docling-serve and Temporal, runs far past the default 300s timeout --
+    # the CI failure this used to hit was the teardown being killed after
+    # every test had already passed.
     size = "large",
     timeout = "eternal",
-    srcs = ["test_temporal_orchestration.py"],
+    srcs = [
+        "test_docling_serve.py",
+        "test_temporal_orchestration.py",
+    ],
     data = [
+        "docker-compose.override.yml",
         "//:docker-compose.yml",
         "//src/orchestration:docker-compose.yml",
         "//tests/ci:docker-compose.cpu.yml",
@@ -50,6 +55,7 @@ py_test(
     deps = [
         ":conftest",
         "//src/orchestration:orchestration_lib",
+        requirement("httpx"),
         requirement("pillow"),
     ],
 )

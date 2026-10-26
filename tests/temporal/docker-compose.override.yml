@@ -1,0 +1,12 @@
+# Test-only overlay on the main stack, never used standalone: publishes, on
+# ephemeral host ports, what the real deployment keeps internal --
+# docling-serve, so its own backpressure (429) can be driven directly, and
+# Redis, so a test can make docling lose a task's records the way an
+# expiry or a Redis loss would.
+services:
+  docling-serve:
+    ports:
+      - "5001"
+  redis:
+    ports:
+      - "6379"

@@ -10,6 +10,9 @@ override the Temporal file's own `name:` too and merge both into one project.
 
 GitHub-hosted CI runners have no GPU: DOCLING_COMPOSE_CPU_OVERLAY layers
 tests/ci/docker-compose.cpu.yml on the main stack, as for tests/integration.
+tests/temporal/docker-compose.override.yml publishes docling-serve and Redis
+on ephemeral host ports, for the tests that drive docling directly or make it
+lose a task.
 """
 
 import asyncio
@@ -79,6 +82,7 @@ def stacks():
     main_files = ["docker-compose.yml"]
     if os.environ.get("DOCLING_COMPOSE_CPU_OVERLAY"):
         main_files.append("tests/ci/docker-compose.cpu.yml")
+    main_files.append("tests/temporal/docker-compose.override.yml")
     temporal_files = ["src/orchestration/docker-compose.yml"]
     temporal_port = _free_port()
     temporal_env = {
@@ -96,8 +100,11 @@ def stacks():
         _wait_healthy(f"{_TEMPORAL_PROJECT}-callback-relay-1", timeout=180)
         yield {
             "temporal_address": f"localhost:{temporal_port}",
+            "temporal_container": f"{_TEMPORAL_PROJECT}-temporal-1",
             "worker_container": f"{_TEMPORAL_PROJECT}-worker-1",
             "relay_container": f"{_TEMPORAL_PROJECT}-callback-relay-1",
+            "docling_container": f"{_MAIN_PROJECT}-docling-serve-1",
+            "redis_container": f"{_MAIN_PROJECT}-redis-1",
             "temporal_project": _TEMPORAL_PROJECT,
             "temporal_files": temporal_files,
             "temporal_env": temporal_env,
@@ -127,6 +134,101 @@ def relay_down(stacks):
             _wait_healthy(relay, timeout=60)
 
     return down
+
+
+@pytest.fixture
+def wrong_relay_token(stacks):
+    """The callback relay recreated with a token other than the worker's for
+    the test's duration -- so it turns docling's callbacks away -- then
+    recreated with the right one. Yields a function returning the relay's
+    logs."""
+
+    @contextmanager
+    def wrong():
+        relay = stacks["relay_container"]
+
+        def recreate(token_env: dict) -> None:
+            _compose(
+                stacks["temporal_project"],
+                stacks["temporal_files"],
+                "up",
+                "-d",
+                "--no-deps",
+                "--force-recreate",
+                "callback-relay",
+                env={**stacks["temporal_env"], **token_env},
+            )
+            _wait_healthy(relay, timeout=60)
+
+        recreate({"CALLBACK_TOKEN": "not-the-workers-token"})
+        try:
+            yield lambda: subprocess.run(
+                ["docker", "logs", relay], capture_output=True, text=True
+            ).stdout
+        finally:
+            recreate({})
+
+    return wrong
+
+
+@pytest.fixture
+def redis_cli(stacks):
+    """Runs redis-cli in docling's Redis, returning its output."""
+
+    def run(*args: str) -> str:
+        return subprocess.run(
+            ["docker", "exec", stacks["redis_container"], "redis-cli", *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    return run
+
+
+@pytest.fixture
+def docling_url(stacks):
+    """docling-serve's base URL on the host. A function: the published port
+    is ephemeral, and changes when the container restarts."""
+
+    def url() -> str:
+        mapped = subprocess.run(
+            ["docker", "port", stacks["docling_container"], "5001"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()[0]
+        return f"http://localhost:{mapped.rsplit(':', 1)[1]}"
+
+    return url
+
+
+@pytest.fixture
+def docling_loses(stacks, redis_cli):
+    """Makes docling-serve forget a task, the way it would losing Redis's
+    data across a crash. Both must go: docling-serve also keeps its tasks in
+    memory, and answers status polls from there while it runs."""
+
+    def lose(task_id: str) -> None:
+        docling = stacks["docling_container"]
+        subprocess.run(["docker", "kill", docling], check=True)
+        keys = redis_cli("--scan", "--pattern", f"*{task_id}*").split()
+        assert keys, f"no Redis records for task {task_id}"
+        redis_cli("DEL", *keys)
+        subprocess.run(["docker", "start", docling], check=True)
+        _wait_healthy(docling, timeout=300)
+
+    return lose
+
+
+@pytest.fixture
+def restart_temporal(stacks):
+    def restart() -> None:
+        temporal = stacks["temporal_container"]
+        subprocess.run(["docker", "restart", temporal], check=True)
+        _wait_healthy(temporal, timeout=120)
+
+    return restart
 
 
 @pytest_asyncio.fixture

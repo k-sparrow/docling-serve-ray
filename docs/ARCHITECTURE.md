@@ -303,8 +303,12 @@ Properties worth knowing:
   nothing). TaskLost resubmits likewise leave the original conversion running
   on Ray until it finishes.
 - **`success` isn't the verdict.** docling reports `task_status=success`
-  even when every document in the task failed; the workflow checks the
-  result's per-document counts and that a `json` output exists.
+  even when every document in the task failed -- a PDF it can't read comes
+  back as a successful task with `num_failed=1` -- so the workflow checks
+  the result's per-document counts and that a `json` output exists. A
+  *task* fails outright when docling can't run it at all (its S3 source is
+  gone, say), reported by docling's dispatcher rather than the Ray
+  deployment; the workflow fails with docling's message from that callback.
 - **Always emits DoclingDocument JSON**, whatever formats are requested —
   it's what a chained chunking step re-ingests (`from_formats=["json_docling"]`)
   without re-running the conversion pipeline.
@@ -353,12 +357,19 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
   failure classification (mocked docling-serve), request bodies checked
   against docling-serve's own request models (`docling-slim`, test-only), and
   workflow logic in Temporal's time-skipping test server — pinned by sha256
-  in `MODULE.bazel`, never downloaded at test time. Callbacks there are sent
-  as the relay's raw JSON, pinning the signal contract from the Python side;
+  in `MODULE.bazel`, never downloaded at test time. The worker process's own
+  setup (`worker.build_workers`) runs there too, with the real activities
+  against a fake docling-serve: submits stay serial across a burst of
+  workflows, stopping the worker lets an in-flight submit finish, and a
+  document in flight can't be dispatched twice. Callbacks are sent as the
+  relay's raw JSON, pinning the signal contract from the Python side;
   `src/callback_relay/relay` pins it from the Go side. `tests/temporal/` runs
-  both real stacks (backend + Temporal + relay), one test per way a workflow
-  is woken: the callback, the safety poll with the relay down, and a callback
-  landing while no worker runs.
+  both real stacks (backend + Temporal + relay): each way a workflow is woken
+  (the callback, the safety poll with the relay down, a callback landing
+  while no worker runs); each way docling reports trouble (an unreadable
+  document, a failed task, a lost task, an expired result); a Temporal
+  server restart and a relay with the wrong token; and docling-serve's own
+  429 for a full queue, the patched image's reason to exist.
 - **Formatting and linting** — ruff (Python), buildifier (Starlark), yamlfmt
   (YAML), gofumpt (Go), and a ruff lint aspect, mirroring Artemis's own
   convention. Go has no separate lint step: nogo runs `go vet` inside every
