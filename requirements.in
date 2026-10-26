@@ -1,14 +1,24 @@
-# Every Python dependency of the repo's code, for all of it at once: resolved
-# with requirements-test.in into requirements_lock.txt, served as the one @pip
-# hub. Each Bazel target still gets only the packages its own deps name, so
-# nothing here reaches an image that doesn't use it.
+# Every Python dependency in the repo, runtime and test tooling alike,
+# resolved into requirements_lock.txt and served as the one @pip hub. Each
+# Bazel target gets only the packages its own deps name, so nothing here
+# reaches an image that doesn't use it -- test tooling included.
 aioboto3  # facade
 boto3  # orchestration, scripts/send_pdf.py
+docker  # tests
+# docling-serve's own request models, to check the bodies the orchestration
+# builds against (its unit tests). Pinned to what the docling-serve base image
+# ships (v1.36.0: 2.132.0) -- bump together. -slim, not docling: no torch or
+# model runtimes.
+docling-slim==2.132.0
 fastapi  # facade
-httpx  # facade, orchestration, scripts/send_pdf.py
+httpx  # facade, orchestration, scripts/send_pdf.py, tests
+pillow  # tests/temporal: renders the OCR-bound fixture PDF
 pydantic-settings  # facade, orchestration
+pytest  # tests
+pytest-asyncio  # tests
 python-multipart  # facade
 redis  # facade
 temporalio  # orchestration
 tenacity  # scripts/send_pdf.py
+testcontainers  # tests
 uvicorn[standard]  # facade

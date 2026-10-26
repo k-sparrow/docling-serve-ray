@@ -47,9 +47,9 @@ python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(python_version = "3.12")
 use_repo(python, "python_3_12")
 
-# Single hub for every Python dependency in the repo -- all runtime deps
-# (requirements.in) and all test tooling (requirements-test.in), resolved
-# together into one lock file (requirements_lock.txt). Matches Artemis's own
+# Single hub for every Python dependency in the repo -- runtime deps and test
+# tooling alike, all in requirements.in, resolved into one lock file
+# (requirements_lock.txt). Matches Artemis's own
 # convention (one `@pip` hub covering both src and tests) rather than
 # per-package hubs: each target gets only the packages its own deps name, so
 # Bazel's dependency graph already keeps the rest out of every image, and
