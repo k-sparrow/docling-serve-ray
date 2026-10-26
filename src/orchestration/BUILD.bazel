@@ -1,0 +1,126 @@
+"""Bazel/rules_oci build for the Temporal orchestration worker image.
+
+Follows rules_oci's Python guide (aspect-build/bazel-examples/oci_python_image),
+as Artemis does: an aspect_rules_py py_binary -- launched from a venv over
+rules_python's hermetic interpreter and the pinned @pip wheels -- split by
+py_image_layer into interpreter, site-packages and app layers, onto plain
+Ubuntu. The image has no Python besides the one in the runfiles. The starter
+CLI is a second py_binary run on the host (`bazel run
+//src/orchestration:start -- convert --prefix ...`), not baked into the
+image. Bazel is the only build: there is no Containerfile.
+"""
+
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_image_layer", "py_library")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Used as test data by //tests/temporal.
+exports_files(["docker-compose.yml"])
+
+py_library(
+    name = "orchestration_lib",
+    srcs = [
+        "__init__.py",
+        "activities.py",
+        "config.py",
+        "dispatch.py",
+        "docling_client.py",
+        "models.py",
+        "workflows.py",
+    ],
+    imports = [".."],
+    deps = [
+        requirement("httpx"),
+        requirement("pydantic-settings"),
+        requirement("temporalio"),
+    ],
+)
+
+py_library(
+    name = "worker_lib",
+    srcs = ["worker.py"],
+    imports = [".."],
+    deps = [
+        ":orchestration_lib",
+        requirement("boto3"),
+    ],
+)
+
+py_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = [".."],
+    main = "worker.py",
+    deps = [":worker_lib"],
+)
+
+py_binary(
+    name = "start",
+    srcs = ["starter.py"],
+    imports = [".."],
+    main = "starter.py",
+    deps = [
+        ":orchestration_lib",
+        requirement("boto3"),
+    ],
+)
+
+# The base image's unprivileged `ubuntu` user (uid/gid 1000). The worker runs
+# as it, and owns its runfiles: the launcher creates the binary's venv inside
+# them on every start.
+UBUNTU_UID = "1000"
+
+py_image_layer(
+    name = "layers",
+    binary = ":worker",
+    group = UBUNTU_UID,
+    owner = UBUNTU_UID,
+    platform = "//tools/platforms:linux_x86_64",
+)
+
+oci_image(
+    name = "image",
+    base = "@ubuntu",
+    entrypoint = ["/src/orchestration/worker"],
+    tars = [":layers"],
+    user = "ubuntu",
+)
+
+platform_transition_filegroup(
+    name = "transitioned_image",
+    srcs = [":image"],
+    target_platform = "//tools/platforms:linux_x86_64",
+)
+
+container_structure_test(
+    name = "structure_test",
+    configs = ["//src/orchestration/tests/structural:structure_test.yaml"],
+    image = ":transitioned_image",
+)
+
+# bazel run //src/orchestration:tarball
+# loads the worker image into the local Docker daemon as:
+#   docling-serve-ray-orchestration:bazel
+#   docling-serve-ray-orchestration:latest
+oci_load(
+    name = "tarball",
+    image = ":transitioned_image",
+    repo_tags = [
+        "docling-serve-ray-orchestration:bazel",
+        "docling-serve-ray-orchestration:latest",
+    ],
+)
+
+# bazel run //src/orchestration:push
+# Pushes to GHCR -- run in CI only (see .github/workflows/ci.yml's
+# push-images job), after tests pass, on push to main.
+oci_push(
+    name = "push",
+    image = ":transitioned_image",
+    remote_tags = ["latest"],
+    repository = "ghcr.io/k-sparrow/docling-serve-ray-orchestration",
+)

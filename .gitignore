@@ -1,4 +1,6 @@
 .venv/
+# Compose env overrides; may hold CALLBACK_TOKEN.
+.env
 bazel-*
 __pycache__/
 .pytest_cache/

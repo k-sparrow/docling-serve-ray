@@ -9,7 +9,7 @@ module(
     compatibility_level = 1,
 )
 
-bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "tar.bzl", version = "0.9.0")
@@ -47,16 +47,13 @@ python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(python_version = "3.12")
 use_repo(python, "python_3_12")
 
-# Single hub for every Python dependency in the repo -- facade's own runtime
-# deps (source: src/facade/requirements.in) and all test tooling (source:
-# requirements-test.in), resolved together into one lock file
-# (requirements_lock.txt) but declared as two separate .in files so it's
-# still clear which concern needs what. Matches Artemis's own convention
-# (one `@pip` hub covering both src and tests) rather than per-package
-# hubs -- Bazel's dependency-graph reachability already keeps unrelated
-# packages out of the facade's OCI image regardless of what's in the shared
-# lock file, so splitting hubs would add Bazel plumbing for no isolation
-# benefit actually gained.
+# Single hub for every Python dependency in the repo -- runtime deps and test
+# tooling alike, all in requirements.in, resolved into one lock file
+# (requirements_lock.txt). Matches Artemis's own
+# convention (one `@pip` hub covering both src and tests) rather than
+# per-package hubs: each target gets only the packages its own deps name, so
+# Bazel's dependency graph already keeps the rest out of every image, and
+# splitting hubs or .in files would add plumbing for no isolation gained.
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
     hub_name = "pip",
@@ -64,6 +61,41 @@ pip.parse(
     requirements_lock = "//:requirements_lock.txt",
 )
 use_repo(pip, "pip")
+
+# py_binary + py_image_layer for Python images, the pattern rules_oci's Python
+# guide points to (aspect-build/bazel-examples/oci_python_image) and Artemis
+# uses: the binary runs from a venv over rules_python's hermetic interpreter
+# and @pip's wheels, and the image gets it as separate interpreter /
+# site-packages / app layers. Used by the orchestration worker
+# (src/orchestration); rules_python stays the toolchain and pip provider.
+# 1.8.4, as in Artemis, is the newest that loads on our Bazel 8.0.1 (checked):
+# 1.8.5+ declare toolchains with use_target_platform_constraints, and
+# 1.11.5+ also call repository_ctx.repo_metadata, both newer than 8.0.1.
+bazel_dep(name = "aspect_rules_py", version = "1.8.4")
+
+# ------------------ GO ------------------------------------------------------
+# The callback relay (src/callback_relay). The root go.mod is the single
+# source of truth: the SDK version comes from its `toolchain` directive and
+# the dependency set from its requires (hash-pinned by go.sum). Both are
+# fetched hermetically -- a Go installed on the host is never used. After
+# editing go.mod or Go imports:
+#   bazel run @rules_go//go -- mod tidy   # go.mod/go.sum with Bazel's Go; also
+#                                         # runs `bazel mod tidy`, which keeps
+#                                         # use_repo(go_deps) below in sync
+#   bazel run //:gazelle                  # regenerates the go_* BUILD rules
+bazel_dep(name = "rules_go", version = "0.64.2")
+bazel_dep(name = "gazelle", version = "0.54.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.from_file(go_mod = "//:go.mod")
+
+# go vet's analyzers run as part of every Go compile, failing the build on a
+# finding -- the Go counterpart of the ruff lint aspect (//tools/lint).
+go_sdk.nogo(nogo = "//tools/lint:nogo")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+use_repo(go_deps, "io_temporal_go_api", "io_temporal_go_sdk")
 
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
@@ -102,6 +134,21 @@ oci.pull(
     tag = "3.12-slim",
 )
 use_repo(oci, "python_3_12_slim", "python_3_12_slim_linux_amd64")
+
+# Base for the orchestration worker, as in Artemis: the image needs no Python
+# of its own -- the py_binary's runfiles carry rules_python's hermetic
+# interpreter -- only glibc, plus bash and coreutils for the py_binary's
+# launcher (rules_python's script bootstrap, see .bazelrc), which rules out
+# distroless. Pinned to the 24.04 tag explicitly so a digest bump can't
+# silently cross into another LTS release.
+oci.pull(
+    name = "ubuntu",
+    digest = "sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac",
+    image = "docker.io/library/ubuntu",
+    platforms = ["linux/amd64"],
+    tag = "24.04",
+)
+use_repo(oci, "ubuntu", "ubuntu_linux_amd64")
 oci.pull(
     name = "nginx_alpine",
     digest = "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",
@@ -110,3 +157,33 @@ oci.pull(
     tag = "1.27-alpine",
 )
 use_repo(oci, "nginx_alpine", "nginx_alpine_linux_amd64")
+
+# Base for the Go callback relay (src/callback_relay): no shell, package
+# manager or libc -- only CA certs, tzdata and the nonroot (65532) user. The
+# relay is a pure-Go static binary, so it needs nothing more.
+oci.pull(
+    name = "distroless_static",
+    digest = "sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99",
+    image = "gcr.io/distroless/static-debian13",
+    platforms = ["linux/amd64"],
+    tag = "nonroot",
+)
+use_repo(oci, "distroless_static", "distroless_static_linux_amd64")
+
+# ------------------ TEST-ONLY BINARIES --------------------------------------
+# Temporal's time-skipping test server, for //src/orchestration's workflow
+# tests. temporalio's WorkflowEnvironment.start_time_skipping() would
+# otherwise download one at test time (whatever version its CDN redirect
+# resolves to that day); pinned here by sha256 instead and handed to the SDK
+# by path (test_server_existing_path). Released as part of temporalio/sdk-java.
+# The archive ships the binary as mode 644 -- the test fixture copies it and
+# sets the exec bit itself.
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "temporal_test_server",
+    build_file_content = 'exports_files(["temporal-test-server"])',
+    sha256 = "524465a96274831e004326f6e2f2a5f3ef9aaed72c2069cf16c1d64b8b1ec3ca",
+    strip_prefix = "temporal-test-server_1.40.0_linux_amd64",
+    urls = ["https://github.com/temporalio/sdk-java/releases/download/v1.40.0/temporal-test-server_1.40.0_linux_amd64.tar.gz"],
+)

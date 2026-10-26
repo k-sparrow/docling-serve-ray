@@ -1,0 +1,212 @@
+# Temporal orchestration stack: a second, independent entrypoint into the
+# same docling-serve + Ray + MinIO backend the root docker-compose.yml runs.
+# It talks to raw docling-serve directly (no facade/nginx) -- its inputs are
+# S3 coordinates of documents already stored, which docling-serve's native
+# /v1/convert/source/batch path handles without any document bytes in Redis.
+#
+# Bring the main stack up FIRST: the worker joins its network (external, by
+# name) to reach docling-serve:5001 and minio:9000, and the callback relay
+# joins it so docling's Ray workers can reach callback-relay:8080.
+#
+#   docker compose up -d                                   # main stack
+#   docker compose -f src/orchestration/docker-compose.yml up -d
+#
+# Images are official and pinned by digest, except the worker and the relay
+# (`bazel run //src/orchestration:tarball`, `bazel run
+# //src/callback_relay:tarball`). temporalio/auto-setup is not
+# used: it stopped being published at 1.29.x while the server moved on, so
+# schema setup is an explicit admin-tools one-shot instead -- the same
+# split Temporal's own reference compose (temporalio/samples-server) uses.
+name: docling-temporal
+
+# Shared secret on every docling callback, checked by the relay. Override
+# CALLBACK_TOKEN outside local development.
+x-callback-token: &callback-token ${CALLBACK_TOKEN:-dev-callback-token}
+
+x-temporal-db-env: &temporal-db-env
+  DB: postgres12
+  DB_PORT: "5432"
+  POSTGRES_USER: temporal
+  POSTGRES_PWD: temporal
+  POSTGRES_SEEDS: temporal-postgres
+
+services:
+  temporal-postgres:
+    image: docker.io/library/postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  temporal-schema:
+    # One-shot: creates the two databases and applies every schema version
+    # up to the server's. Safe to re-run on every `up` -- an existing
+    # database or an already-initialized schema version table is skipped,
+    # and update-schema only applies versions not yet recorded.
+    image: docker.io/temporalio/admin-tools:1.32.1@sha256:9ef0dc5b063bf4ffd5c1512de72e0e73e225bd2c7006a18ce69bd592a8862a83
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    environment:
+      <<: *temporal-db-env
+      SQL_PASSWORD: temporal
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        sql() { temporal-sql-tool --plugin postgres12 --ep "$$POSTGRES_SEEDS" -u "$$POSTGRES_USER" -p "$$DB_PORT" "$$@"; }
+        for db in temporal temporal_visibility; do
+          case $$db in
+            temporal) dir=temporal ;;
+            temporal_visibility) dir=visibility ;;
+          esac
+          sql --db "$$db" create 2>/dev/null || echo "database $$db already exists"
+          sql --db "$$db" setup-schema -v 0.0 2>/dev/null || echo "schema version table for $$db already exists"
+          sql --db "$$db" update-schema -d "/etc/temporal/schema/postgresql/v12/$$dir/versioned"
+        done
+        echo "schema setup complete"
+
+  temporal:
+    image: docker.io/temporalio/server:1.32.1@sha256:acecbab5b0b8ae9cf4012b508866ca97feda3709577bf157b537239f40029049
+    depends_on:
+      temporal-schema:
+        condition: service_completed_successfully
+    environment:
+      <<: *temporal-db-env
+      BIND_ON_IP: 0.0.0.0
+    configs:
+      # The server refuses to start without a dynamic config file at this
+      # (default) path, and the image doesn't ship one.
+      - source: temporal-dynamic-config
+        target: /etc/temporal/config/dynamicconfig/docker.yaml
+    ports:
+      # Published for the host-side starter CLI (ORCH_TEMPORAL_ADDRESS),
+      # localhost only -- this server has no auth. Override the host port
+      # when 7233 is taken, e.g. by another local Temporal.
+      - "127.0.0.1:${TEMPORAL_HOST_PORT:-7233}:7233"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
+
+  temporal-namespace:
+    # One-shot: ensures the `default` namespace exists. Its retention (how
+    # long a finished workflow's history stays queryable) matches docling's
+    # 7-day results TTL. Retried, since the frontend can accept TCP before
+    # it serves namespace RPCs.
+    image: docker.io/temporalio/admin-tools:1.32.1@sha256:9ef0dc5b063bf4ffd5c1512de72e0e73e225bd2c7006a18ce69bd592a8862a83
+    depends_on:
+      temporal:
+        condition: service_healthy
+    restart: on-failure:10
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        temporal operator cluster health
+        temporal operator namespace describe -n default >/dev/null 2>&1 \
+          && echo "namespace default already exists" \
+          || temporal operator namespace create -n default --retention 7d
+
+  temporal-ui:
+    image: docker.io/temporalio/ui:2.57.0@sha256:d944f959d0923c35cd991a17a0edbe087770eff843724b181933e0cfdd563ab2
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "127.0.0.1:${TEMPORAL_UI_HOST_PORT:-8080}:8080"
+
+  callback-relay:
+    # Built via `bazel run //src/callback_relay:tarball`. docling-serve's Ray
+    # workers POST each task's completion here; the relay turns it into the
+    # task_completed signal of the workflow named in the callback URL.
+    # Stateless, so it may run several replicas. Deliberately not published
+    # to the host: the token travels in every submit and sits in docling's
+    # Redis task records.
+    image: docling-serve-ray-callback-relay:latest
+    depends_on:
+      temporal-namespace:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    environment:
+      RELAY_TEMPORAL_ADDRESS: temporal:7233
+      RELAY_CALLBACK_TOKEN: *callback-token
+    healthcheck:
+      # distroless: no shell or curl, so the binary probes itself.
+      test: ["CMD", "/callback_relay", "-healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - default
+      - docling
+
+  worker:
+    # Built via `bazel run //src/orchestration:tarball` (Bazel only).
+    image: docling-serve-ray-orchestration:latest
+    depends_on:
+      temporal-namespace:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    # Exactly one replica: the submit queue's concurrency limit of 1 is
+    # per-process, and serial submission is what keeps docling-serve's
+    # non-atomic queue counter honest (see src/orchestration/models.py).
+    deploy:
+      replicas: 1
+    # Room for both of the worker's shutdowns (worker.py GRACEFUL_SHUTDOWN,
+    # 2 x 10s) before Docker sends SIGKILL; its default is 10s.
+    stop_grace_period: 30s
+    environment:
+      ORCH_TEMPORAL_ADDRESS: temporal:7233
+      ORCH_DOCLING_SERVE_URL: http://docling-serve:5001
+      ORCH_S3_ENDPOINT: minio:9000
+      ORCH_S3_ENDPOINT_URL: http://minio:9000
+      ORCH_S3_ACCESS_KEY: minioadmin
+      ORCH_S3_SECRET_KEY: minioadmin123
+      # The address docling's Ray workers (not this worker) call back on.
+      # No depends_on for the relay: while it's down, workflows still
+      # finish on their safety polls, just later.
+      ORCH_CALLBACK_BASE_URL: http://callback-relay:8080
+      ORCH_CALLBACK_TOKEN: *callback-token
+      # Activity start-to-close timeouts, in seconds. Valueless: each is taken
+      # from the shell or a .env next to this file when set there, and left
+      # unset in the container otherwise, so config.py's default applies.
+      ORCH_SUBMIT_CONVERSION_START_TO_CLOSE_SECONDS:
+      ORCH_CHECK_TASK_START_TO_CLOSE_SECONDS:
+      ORCH_FETCH_OUTCOME_START_TO_CLOSE_SECONDS:
+      ORCH_COLLECT_OUTPUTS_START_TO_CLOSE_SECONDS:
+    networks:
+      - default
+      - docling
+
+networks:
+  docling:
+    # The main stack's default network. Its name follows that stack's
+    # Compose project name -- override when it isn't the default
+    # `docling-serve-ray` (e.g. the integration test's isolated project).
+    external: true
+    name: ${DOCLING_NETWORK:-docling-serve-ray_default}
+
+volumes:
+  temporal-postgres-data:
+
+configs:
+  temporal-dynamic-config:
+    # Inline rather than a bind-mounted file so the stack has no
+    # working-directory-relative paths. Empty: every dynamic setting stays at
+    # the server's default (notably limit.maxIDLength = 1000, comfortably
+    # above `convert:{bucket}/{key}` workflow ids).
+    content: |
+      {}

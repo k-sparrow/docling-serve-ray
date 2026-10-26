@@ -37,6 +37,14 @@ def pytest_test(name, srcs, **kwargs):
     data = kwargs.pop("data", [])
     env = kwargs.pop("env", {})
 
+    # Test-only attributes: valid on the test rule below, not on the
+    # py_library that carries the sources.
+    test_attrs = {
+        attr: kwargs.pop(attr)
+        for attr in ("size", "timeout", "flaky", "shard_count")
+        if attr in kwargs
+    }
+
     args = kwargs.pop("args", []) + [
         "--capture=no",
         "-v",
@@ -78,5 +86,5 @@ def pytest_test(name, srcs, **kwargs):
         # The following is reusing the ideas defined in
         # https://github.com/caseyduquettesc/rules_python_pytest/blob/main/python_pytest/defs.bzl
         args = args,
-        **kwargs
+        **(kwargs | test_attrs)
     )

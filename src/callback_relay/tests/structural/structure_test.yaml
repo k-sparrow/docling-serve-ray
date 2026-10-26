@@ -1,0 +1,30 @@
+schemaVersion: "2.0.0"
+
+fileExistenceTests:
+  - name: "relay binary is baked in and executable"
+    path: "/callback_relay"
+    shouldExist: true
+    permissions: "-rwxr-xr-x"
+
+  # distroless/static: no shell to exec into, which is why the compose
+  # healthcheck calls the binary's own -healthcheck mode instead of curl.
+  - name: "no shell in the image"
+    path: "/bin/sh"
+    shouldExist: false
+
+commandTests:
+  # Proves the binary actually runs on a base with no libc (pure-Go static
+  # link): -healthcheck executes, finds nothing listening, exits 1.
+  - name: "static binary runs on distroless"
+    command: "/callback_relay"
+    args: ["-healthcheck"]
+    exitCode: 1
+    expectedError: ["healthcheck: .*connection refused"]
+
+metadataTest:
+  entrypoint: ["/callback_relay"]
+  exposedPorts: ["8080"]
+  user: "65532"
+  labels:
+    - key: "org.opencontainers.image.source"
+      value: "https://github.com/k-sparrow/docling-serve-ray"

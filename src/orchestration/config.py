@@ -1,0 +1,71 @@
+"""Worker and starter settings.
+
+Everything a workflow run needs that is either environment-specific (where
+docling-serve, MinIO and Temporal live, how long activities may take) or
+secret (S3 credentials) comes from here, read by activities, the workflow's
+activity timeouts and the starter -- never passed as workflow input.
+Workflow inputs end up in Temporal's event history (Postgres, the UI, `temporal
+workflow show`), so they carry only document coordinates and conversion
+options.
+
+Defaults target a host-side run (the starter CLI, published ports on
+localhost). The worker container overrides them via ORCH_* env vars in
+src/orchestration/docker-compose.yml.
+"""
+
+from functools import lru_cache
+
+from pydantic import PositiveInt
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ORCH_")
+
+    temporal_address: str = "localhost:7233"
+    temporal_namespace: str = "default"
+
+    # For the main task queue only (polling, output listing) -- the submit
+    # queue's limit is fixed at 1, see models.SUBMIT_TASK_QUEUE.
+    max_concurrent_activities: int = 16
+
+    docling_serve_url: str = "http://localhost:5001"
+    tenant_id: str | None = None
+    tenant_id_header: str = "X-Tenant-Id"
+
+    # Where docling-serve's Ray workers reach the callback relay
+    # (src/callback_relay), which turns docling's completion callback into
+    # the workflow's task_completed signal. Unset: no callback is registered
+    # and workflows advance on their safety polls alone.
+    callback_base_url: str | None = None
+    # Shared secret the relay checks on every callback. It travels in each
+    # submit request, so docling keeps it in its Redis task record -- the
+    # relay must stay internal to the compose network.
+    callback_token: str = ""
+
+    # How docling-serve's Ray workers reach S3 (compose DNS) -- goes into the
+    # S3 coordinates of every submit request.
+    s3_endpoint: str = "minio:9000"
+    s3_verify_ssl: bool = False
+    # How this process reaches S3 itself (listing inputs and outputs). Differs
+    # from s3_endpoint for the host-side starter (published port).
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin123"
+
+    output_bucket: str = "docling-output"
+    output_prefix: str = "temporal/"
+
+    # Start-to-close timeout of each activity, i.e. of one attempt. Read by
+    # the workflow when it schedules the activity, so a change takes effect
+    # from a worker's next start -- in-flight runs included, since Temporal
+    # doesn't compare activity timeouts on replay.
+    submit_conversion_start_to_close_seconds: PositiveInt = 120
+    check_task_start_to_close_seconds: PositiveInt = 120
+    fetch_outcome_start_to_close_seconds: PositiveInt = 120
+    collect_outputs_start_to_close_seconds: PositiveInt = 300
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

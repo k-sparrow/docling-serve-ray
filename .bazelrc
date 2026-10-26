@@ -1,1 +1,5 @@
 common --enable_bzlmod
+
+# aspect_rules_py brings in aspect_tools_telemetry, which otherwise POSTs
+# ruleset-usage reports to telemetry.aspect.build from every machine and CI job.
+common --repo_env=DO_NOT_TRACK=1
