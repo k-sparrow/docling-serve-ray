@@ -47,16 +47,13 @@ python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(python_version = "3.12")
 use_repo(python, "python_3_12")
 
-# Single hub for every Python dependency in the repo -- each component's own
-# runtime deps (src/facade/requirements.in, src/orchestration/requirements.in)
-# and all test tooling (requirements-test.in), resolved together into one
-# lock file (requirements_lock.txt) but declared as separate .in files so
-# it's still clear which concern needs what. Matches Artemis's own convention
-# (one `@pip` hub covering both src and tests) rather than per-package
-# hubs -- Bazel's dependency-graph reachability already keeps unrelated
-# packages out of the facade's OCI image regardless of what's in the shared
-# lock file, so splitting hubs would add Bazel plumbing for no isolation
-# benefit actually gained.
+# Single hub for every Python dependency in the repo -- all runtime deps
+# (requirements.in) and all test tooling (requirements-test.in), resolved
+# together into one lock file (requirements_lock.txt). Matches Artemis's own
+# convention (one `@pip` hub covering both src and tests) rather than
+# per-package hubs: each target gets only the packages its own deps name, so
+# Bazel's dependency graph already keeps the rest out of every image, and
+# splitting hubs or .in files would add plumbing for no isolation gained.
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
     hub_name = "pip",

@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-python-multipart
-aioboto3
-redis
-httpx
-pydantic-settings

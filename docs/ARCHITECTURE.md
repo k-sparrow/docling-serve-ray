@@ -433,5 +433,5 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
 - **Requirements** — Docker Compose, an NVIDIA GPU with drivers + the NVIDIA
   Container Toolkit for the real stack; Bazel (via `bazelisk`) for the
   reproducible builds (required for the orchestration worker and the relay,
-  optional for the images with `Containerfile` fallbacks); Python 3 with `requirements.in`'s packages to run
-  `scripts/send_pdf.py`.
+  optional for the images with `Containerfile` fallbacks); Python 3 with
+  `httpx`, `tenacity` and `boto3` to run `scripts/send_pdf.py`.

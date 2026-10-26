@@ -111,7 +111,7 @@ bazel build --aspects=//tools/lint:linters.bzl%ruff --output_groups=rules_lint_h
 
 - Docker Compose, an NVIDIA GPU with drivers + the NVIDIA Container Toolkit, for the real stack.
 - Bazel (via `bazelisk`), for the reproducible image builds. Required for the orchestration worker and the callback relay; optional for the patched docling-serve and facade images, which have `Containerfile` fallbacks.
-- Python 3 with the packages in `requirements.in`, to run `scripts/send_pdf.py`.
+- Python 3 with `httpx`, `tenacity` and `boto3` (all pinned in `requirements_lock.txt`), to run `scripts/send_pdf.py`.
 
 ## License
 

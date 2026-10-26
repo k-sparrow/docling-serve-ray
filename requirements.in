@@ -1,3 +1,14 @@
-httpx
-tenacity
-boto3
+# Every Python dependency of the repo's code, for all of it at once: resolved
+# with requirements-test.in into requirements_lock.txt, served as the one @pip
+# hub. Each Bazel target still gets only the packages its own deps name, so
+# nothing here reaches an image that doesn't use it.
+aioboto3  # facade
+boto3  # orchestration, scripts/send_pdf.py
+fastapi  # facade
+httpx  # facade, orchestration, scripts/send_pdf.py
+pydantic-settings  # facade, orchestration
+python-multipart  # facade
+redis  # facade
+temporalio  # orchestration
+tenacity  # scripts/send_pdf.py
+uvicorn[standard]  # facade
