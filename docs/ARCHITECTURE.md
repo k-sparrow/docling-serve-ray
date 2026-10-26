@@ -313,6 +313,10 @@ Properties worth knowing:
   only bucket, key, conversion options and the safety-poll knobs. The token
   does reach docling-serve's Redis task records (it's sent with each
   submit), which is why the relay is never published to the host.
+- **Activity timeouts are worker config too** (`ORCH_*_START_TO_CLOSE_SECONDS`),
+  read when each activity is scheduled. Temporal doesn't compare activity
+  timeouts on replay, so a worker restarted with new values also applies them
+  to workflows already in flight; a replay test pins that.
 
 ## Testing
 

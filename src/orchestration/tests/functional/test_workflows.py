@@ -22,8 +22,9 @@ from temporalio import activity
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowFailureError
 from temporalio.exceptions import ApplicationError
-from temporalio.worker import Worker
+from temporalio.worker import Replayer, Worker
 
+from orchestration.config import get_settings
 from orchestration.models import (
     DEFAULT_SAFETY_POLL_INTERVAL_SECONDS,
     SUBMIT_TASK_QUEUE,
@@ -144,6 +145,31 @@ def callback(task_id: str, status: str, error_message: str | None = None) -> dic
     if error_message is not None:
         event["error_message"] = error_message
     return event
+
+
+@pytest.fixture
+def worker_timeouts(monkeypatch):
+    """Sets ORCH_<ACTIVITY>_START_TO_CLOSE_SECONDS the way the worker's
+    compose env does, e.g. worker_timeouts(check_task=30)."""
+
+    def set_timeouts(**seconds: int) -> None:
+        for activity_name, value in seconds.items():
+            monkeypatch.setenv(
+                f"ORCH_{activity_name.upper()}_START_TO_CLOSE_SECONDS", str(value)
+            )
+        get_settings.cache_clear()
+
+    yield set_timeouts
+    get_settings.cache_clear()
+
+
+async def scheduled_timeouts(handle) -> dict[str, timedelta]:
+    return {
+        attrs.activity_type.name: attrs.start_to_close_timeout.ToTimedelta()
+        async for event in handle.fetch_history_events()
+        if event.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
+        for attrs in [event.activity_task_scheduled_event_attributes]
+    }
 
 
 async def run_convert(
@@ -397,3 +423,56 @@ async def test_missing_json_output_fails(workflow_env):
         await run_convert(workflow_env, mocks)
 
     assert exc.value.cause.type == ErrorType.MISSING_OUTPUTS
+
+
+async def test_activity_timeouts_come_from_the_worker_env(
+    workflow_env, worker_timeouts
+):
+    worker_timeouts(
+        submit_conversion=11, check_task=22, fetch_outcome=33, collect_outputs=44
+    )
+    # No callback, so the run goes through one safety poll and schedules all
+    # four activities.
+    mocks = Mocks()
+
+    async with workers(workflow_env, mocks):
+        handle = await workflow_env.client.start_workflow(
+            ConvertDocumentWorkflow.run,
+            ConvertInput(bucket="b", key="k"),
+            id=f"test-{uuid.uuid4()}",
+            task_queue=TASK_QUEUE,
+        )
+        await handle.result()
+        timeouts = await scheduled_timeouts(handle)
+
+    assert timeouts == {
+        "submit_conversion": timedelta(seconds=11),
+        "check_task": timedelta(seconds=22),
+        "fetch_outcome": timedelta(seconds=33),
+        "collect_outputs": timedelta(seconds=44),
+    }
+
+
+async def test_changed_timeouts_replay_without_nondeterminism(
+    workflow_env, worker_timeouts
+):
+    # A worker restarted with new timeouts replays the histories of runs
+    # still in flight, whose activities were scheduled with the old ones.
+    worker_timeouts(check_task=22, collect_outputs=44)
+    mocks = Mocks()
+    async with workers(workflow_env, mocks):
+        handle = await workflow_env.client.start_workflow(
+            ConvertDocumentWorkflow.run,
+            ConvertInput(bucket="b", key="k"),
+            id=f"test-{uuid.uuid4()}",
+            task_queue=TASK_QUEUE,
+        )
+        await handle.result()
+        history = await handle.fetch_history()
+
+    worker_timeouts(check_task=600, collect_outputs=3600)
+
+    replay = await Replayer(workflows=[ConvertDocumentWorkflow]).replay_workflow(
+        history
+    )
+    assert replay.replay_failure is None

@@ -25,6 +25,7 @@ from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from orchestration.activities import DoclingActivities
+    from orchestration.config import get_settings
     from orchestration.models import (
         REQUIRED_FORMAT,
         SUBMIT_TASK_QUEUE,
@@ -80,6 +81,10 @@ class ConvertDocumentWorkflow:
         # and a lost task's late callback must not complete its replacement.
         self._completed: dict[str, TaskCompleted] = {}
         self._safety_polls = 0
+        # The worker's ORCH_*_START_TO_CLOSE_SECONDS. Worker config, not
+        # workflow input: the timeouts belong to the deployment, and changing
+        # them is replay-safe (tests/functional/test_workflows.py proves it).
+        self._settings = get_settings()
 
     @workflow.signal(name=TASK_COMPLETED_SIGNAL)
     def task_completed(self, event: TaskCompleted) -> None:
@@ -102,7 +107,9 @@ class ConvertDocumentWorkflow:
                 DoclingActivities.submit_conversion,
                 submit_input,
                 task_queue=SUBMIT_TASK_QUEUE,
-                start_to_close_timeout=timedelta(minutes=2),
+                start_to_close_timeout=timedelta(
+                    seconds=self._settings.submit_conversion_start_to_close_seconds
+                ),
                 retry_policy=SUBMIT_RETRY,
             )
             try:
@@ -131,7 +138,9 @@ class ConvertDocumentWorkflow:
         outcome = await workflow.execute_activity_method(
             DoclingActivities.fetch_outcome,
             task_id,
-            start_to_close_timeout=timedelta(minutes=2),
+            start_to_close_timeout=timedelta(
+                seconds=self._settings.fetch_outcome_start_to_close_seconds
+            ),
         )
         if outcome.num_succeeded is not None:
             produced = outcome.num_succeeded + (outcome.num_partially_succeeded or 0)
@@ -147,7 +156,9 @@ class ConvertDocumentWorkflow:
         collected = await workflow.execute_activity_method(
             DoclingActivities.collect_outputs,
             CollectOutputsInput(bucket=inp.bucket, key=inp.key),
-            start_to_close_timeout=timedelta(minutes=5),
+            start_to_close_timeout=timedelta(
+                seconds=self._settings.collect_outputs_start_to_close_seconds
+            ),
         )
         if REQUIRED_FORMAT not in collected.outputs:
             raise ApplicationError(
@@ -221,7 +232,9 @@ class ConvertDocumentWorkflow:
             return await workflow.execute_activity_method(
                 DoclingActivities.check_task,
                 task_id,
-                start_to_close_timeout=timedelta(minutes=2),
+                start_to_close_timeout=timedelta(
+                    seconds=self._settings.check_task_start_to_close_seconds
+                ),
                 retry_policy=CHECK_RETRY,
             )
         except ActivityError as err:

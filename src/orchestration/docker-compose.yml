@@ -178,6 +178,13 @@ services:
       # finish on their safety polls, just later.
       ORCH_CALLBACK_BASE_URL: http://callback-relay:8080
       ORCH_CALLBACK_TOKEN: *callback-token
+      # Activity start-to-close timeouts, in seconds. Valueless: each is taken
+      # from the shell or a .env next to this file when set there, and left
+      # unset in the container otherwise, so config.py's default applies.
+      ORCH_SUBMIT_CONVERSION_START_TO_CLOSE_SECONDS:
+      ORCH_CHECK_TASK_START_TO_CLOSE_SECONDS:
+      ORCH_FETCH_OUTCOME_START_TO_CLOSE_SECONDS:
+      ORCH_COLLECT_OUTPUTS_START_TO_CLOSE_SECONDS:
     networks:
       - default
       - docling

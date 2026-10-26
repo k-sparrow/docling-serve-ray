@@ -1,8 +1,9 @@
 """Worker and starter settings.
 
 Everything a workflow run needs that is either environment-specific (where
-docling-serve, MinIO and Temporal live) or secret (S3 credentials) comes from
-here, read by activities and the starter -- never passed as workflow input.
+docling-serve, MinIO and Temporal live, how long activities may take) or
+secret (S3 credentials) comes from here, read by activities, the workflow's
+activity timeouts and the starter -- never passed as workflow input.
 Workflow inputs end up in Temporal's event history (Postgres, the UI, `temporal
 workflow show`), so they carry only document coordinates and conversion
 options.
@@ -14,6 +15,7 @@ src/orchestration/docker-compose.yml.
 
 from functools import lru_cache
 
+from pydantic import PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -53,6 +55,15 @@ class Settings(BaseSettings):
 
     output_bucket: str = "docling-output"
     output_prefix: str = "temporal/"
+
+    # Start-to-close timeout of each activity, i.e. of one attempt. Read by
+    # the workflow when it schedules the activity, so a change takes effect
+    # from a worker's next start -- in-flight runs included, since Temporal
+    # doesn't compare activity timeouts on replay.
+    submit_conversion_start_to_close_seconds: PositiveInt = 120
+    check_task_start_to_close_seconds: PositiveInt = 120
+    fetch_outcome_start_to_close_seconds: PositiveInt = 120
+    collect_outputs_start_to_close_seconds: PositiveInt = 300
 
 
 @lru_cache
