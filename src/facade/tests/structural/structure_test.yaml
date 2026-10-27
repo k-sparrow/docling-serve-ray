@@ -10,12 +10,49 @@ fileExistenceTests:
     shouldExist: true
 
   - name: "fastapi dependency closure is baked in"
-    path: "/src/facade/serve.runfiles/rules_python++pip+pip_312_fastapi/__init__.py"
+    path: "/src/facade/serve.runfiles/rules_python++pip+pip_312_fastapi/site-packages/fastapi/__init__.py"
     shouldExist: true
 
   - name: "uvicorn dependency closure is baked in"
-    path: "/src/facade/serve.runfiles/rules_python++pip+pip_312_uvicorn/__init__.py"
+    path: "/src/facade/serve.runfiles/rules_python++pip+pip_312_uvicorn/site-packages/uvicorn/__init__.py"
     shouldExist: true
+
+  # The one Python in the image: rules_python's hermetic interpreter, carried
+  # in the runfiles. The Ubuntu base has none of its own.
+  - name: "hermetic interpreter is baked in"
+    path: "/src/facade/serve.runfiles/rules_python++python+python_3_12_x86_64-unknown-linux-gnu/bin/python3"
+    shouldExist: true
+
+  # The launcher creates the binary's venv inside the runfiles on every
+  # start, as the image's non-root user -- who must therefore own them.
+  - name: "runfiles are owned by the ubuntu user"
+    path: "/src/facade/serve.runfiles"
+    shouldExist: true
+    uid: 1000
+    gid: 1000
+
+  - name: "no system python"
+    path: "/usr/bin/python3"
+    shouldExist: false
+
+  - name: "no system python (/usr/local)"
+    path: "/usr/local/bin/python3"
+    shouldExist: false
+
+commandTests:
+  # Starts the real entrypoint -- bash launcher, venv creation, hermetic
+  # interpreter, uvicorn, every import -- and stops at settings validation in
+  # the app's lifespan, before it binds a port or reaches Redis/S3, so it
+  # exits instead of serving. uvicorn's exit code for a failed startup is 3.
+  - name: "facade starts and validates its settings"
+    command: "/src/facade/serve"
+    envVars:
+      - key: "FACADE_RECORD_TTL_SECONDS"
+        value: "x"
+    exitCode: 3
+    expectedError: ["record_ttl_seconds\\s+Input should be a valid integer"]
 
 metadataTest:
   entrypoint: ["/src/facade/serve"]
+  exposedPorts: ["8000"]
+  user: "ubuntu"

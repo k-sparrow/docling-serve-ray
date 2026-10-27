@@ -392,25 +392,24 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
   local Docker daemon in one command. The relay follows rules_oci's Go guide:
   a gazelle-generated `go_binary` (Go toolchain and modules from the root
   `go.mod`, fetched hermetically) in a `tar` layer on `distroless/static`,
-  built through a linux/amd64 platform transition. The orchestration worker
-  follows rules_oci's Python guide, as Artemis does: an `aspect_rules_py`
-  `py_binary`, split by `py_image_layer` into interpreter, site-packages and
-  app layers (a code change re-uploads under 1 MB), on plain `ubuntu:24.04`.
-  The only Python in the image is rules_python's hermetic interpreter from
-  the runfiles. It runs as the non-root `ubuntu` user, who owns the runfiles
-  because the launcher creates the binary's venv there on every start. Not
-  distroless: the launcher is a bash script.
+  built through a linux/amd64 platform transition. The facade and the
+  orchestration worker follow rules_oci's Python guide, as Artemis does: an
+  `aspect_rules_py` `py_binary`, split by `py_image_layer` into interpreter,
+  site-packages and app layers (a code change re-uploads under 1 MB), on
+  plain `ubuntu:24.04`. The only Python in each image is rules_python's
+  hermetic interpreter from the runfiles. Each runs as the non-root `ubuntu`
+  user, who owns the runfiles because the launcher creates the binary's venv
+  there on every start. Not distroless: the launcher is a bash script.
 - **Temporal stack** — `docker compose -f src/orchestration/docker-compose.yml up -d`,
   after the main stack (the worker and the relay join its network). Official
   `temporalio/{server,admin-tools,ui}` + `postgres` images pinned by digest;
   schema setup and namespace creation are idempotent one-shots. Host ports
   bind to localhost and are overridable (`TEMPORAL_HOST_PORT`,
   `TEMPORAL_UI_HOST_PORT`) for machines already running another Temporal.
-- **`Containerfile` fallbacks** — the patched docling-serve and the facade
-  also have a plain `docker build`-able `Containerfile` next to their own
-  `BUILD.bazel` (`src/patches/docling_serve/Containerfile`,
-  `src/facade/Containerfile`), for anyone iterating without Bazel set up.
-  The orchestration worker and the callback relay are built by Bazel only.
+- **`Containerfile` fallback** — the patched docling-serve also has a plain
+  `docker build`-able `src/patches/docling_serve/Containerfile` next to its
+  `BUILD.bazel`, for anyone iterating without Bazel set up. The facade, the
+  orchestration worker and the callback relay are built by Bazel only.
 - **`docker compose up`** — brings up the full stack against the locally
   loaded/built images: MinIO, Redis, ray-head/ray-worker, `docling-serve`,
   `facade`, `nginx`. Only `nginx` (`5001`) and MinIO (`9000`/`9001`, for
@@ -432,6 +431,7 @@ bazel test //:test.docker     # Docker-dependent — needs a real daemon
     `test-docker` job).
 - **Requirements** — Docker Compose, an NVIDIA GPU with drivers + the NVIDIA
   Container Toolkit for the real stack; Bazel (via `bazelisk`) for the
-  reproducible builds (required for the orchestration worker and the relay,
-  optional for the images with `Containerfile` fallbacks); Python 3 with
+  reproducible builds (required for the facade, the orchestration worker and
+  the relay, optional for the patched docling-serve image with its
+  `Containerfile` fallback); Python 3 with
   `httpx`, `tenacity` and `boto3` to run `scripts/send_pdf.py`.

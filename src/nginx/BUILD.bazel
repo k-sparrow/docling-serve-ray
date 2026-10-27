@@ -3,7 +3,7 @@
 Layers nginx.conf onto the official `nginx:1.27-alpine` base via a real
 rules_oci `oci_image`, pinned to the base image digest in MODULE.bazel --
 same pattern as the patched docling-serve image at
-//src/patches/docling_serve and the facade image at //src/facade.
+//src/patches/docling_serve.
 """
 
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
