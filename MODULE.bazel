@@ -24,7 +24,7 @@ bazel_dep(name = "rules_multirun", version = "0.9.0")
 # collide with this repo's rules_python 1.6.3 pin. flake8 is deliberately
 # not adopted here (unlike Artemis's tools/lint/) -- Artemis wires it via
 # py_console_script_binary, which needs rules_python 2.x's venv bootstrap,
-# the same mechanism already ruled out above for facade's OCI image build.
+# and this repo is pinned below 2.x (see the rules_python pin below).
 # ruff alone covers the same ground (it reimplements flake8's checks) so
 # nothing is actually lost.
 bazel_dep(name = "aspect_rules_lint", version = "1.0.2")
@@ -32,15 +32,16 @@ bazel_dep(name = "buildifier_prebuilt", version = "7.3.1")
 
 # Pinned to the last version before rules_python 2.x's breaking change: 2.x
 # switched py_binary's default bootstrap mechanism to a build-time venv
-# symlink (bin/python3 -> the toolchain interpreter) that doesn't survive
-# being packaged into a sandboxed tar action for the facade's OCI image --
-# confirmed empirically (2.0.0 fails with "Can't open .../_serve.venv/bin/
-# python3" when facade:app_layer tries to tar it up). 2.3.1, the latest at
-# time of writing, additionally fails to even load against our pinned Bazel
-# 8.0.1 (.bazelversion): "name 'flag_alias' is not defined" in its own
-# MODULE.bazel, a newer bzlmod primitive our Bazel doesn't provide. Revisit
-# once either rules_python's docs cover the venv-bootstrap + rules_oci tar
-# combination, or this repo bumps Bazel and re-tests 2.3.1's MODULE.bazel load.
+# symlink (bin/python3 -> the toolchain interpreter) that didn't survive
+# being packaged into a sandboxed tar action -- confirmed empirically back
+# when the facade image was a rules_python py_binary in a single
+# tar(include_runfiles) layer (2.0.0 failed with "Can't open
+# .../_serve.venv/bin/python3"). No image is built that way any more: both
+# Python images use aspect_rules_py's py_image_layer (below). 2.3.1, the
+# latest at time of writing, additionally fails to even load against our
+# pinned Bazel 8.0.1 (.bazelversion): "name 'flag_alias' is not defined" in
+# its own MODULE.bazel, a newer bzlmod primitive our Bazel doesn't provide.
+# Revisit once this repo bumps Bazel and re-tests 2.3.1's MODULE.bazel load.
 bazel_dep(name = "rules_python", version = "1.6.3")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
@@ -66,8 +67,9 @@ use_repo(pip, "pip")
 # guide points to (aspect-build/bazel-examples/oci_python_image) and Artemis
 # uses: the binary runs from a venv over rules_python's hermetic interpreter
 # and @pip's wheels, and the image gets it as separate interpreter /
-# site-packages / app layers. Used by the orchestration worker
-# (src/orchestration); rules_python stays the toolchain and pip provider.
+# site-packages / app layers. Used by the facade (src/facade) and the
+# orchestration worker (src/orchestration); rules_python stays the toolchain
+# and pip provider.
 # 1.8.4, as in Artemis, is the newest that loads on our Bazel 8.0.1 (checked):
 # 1.8.5+ declare toolchains with use_target_platform_constraints, and
 # 1.11.5+ also call repository_ctx.repo_metadata, both newer than 8.0.1.
@@ -126,20 +128,12 @@ oci.pull(
     tag = "v1.36.0",
 )
 use_repo(oci, "docling-serve-cpu", "docling-serve-cpu_linux_amd64")
-oci.pull(
-    name = "python_3_12_slim",
-    digest = "sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a",
-    image = "docker.io/library/python",
-    platforms = ["linux/amd64"],
-    tag = "3.12-slim",
-)
-use_repo(oci, "python_3_12_slim", "python_3_12_slim_linux_amd64")
 
-# Base for the orchestration worker, as in Artemis: the image needs no Python
-# of its own -- the py_binary's runfiles carry rules_python's hermetic
-# interpreter -- only glibc, plus bash and coreutils for the py_binary's
-# launcher (rules_python's script bootstrap, see .bazelrc), which rules out
-# distroless. Pinned to the 24.04 tag explicitly so a digest bump can't
+# Base for the facade and the orchestration worker, as in Artemis: neither
+# image needs a Python of its own -- the py_binary's runfiles carry
+# rules_python's hermetic interpreter -- only glibc, plus bash and coreutils
+# for the py_binary's launcher (rules_python's script bootstrap, see
+# .bazelrc), which rules out distroless. Pinned to the 24.04 tag explicitly so a digest bump can't
 # silently cross into another LTS release.
 oci.pull(
     name = "ubuntu",

@@ -1,18 +1,19 @@
 """Bazel/rules_oci build for the facade image.
 
-Packages the facade's py_binary (its own runfiles tree, including the pinned
-pip dependency closure from @pip) as a tar layer onto the official
-python:3.12-slim base, mirroring the pattern used for the patched
-docling-serve image at //src/patches/docling_serve. See
-facade/Containerfile for the plain `docker build` equivalent (non-Bazel
-fallback, useful for a faster local iteration loop).
+Follows rules_oci's Python guide (aspect-build/bazel-examples/oci_python_image),
+the same as the orchestration worker at //src/orchestration: an
+aspect_rules_py py_binary -- launched from a venv over rules_python's hermetic
+interpreter and the pinned @pip wheels -- split by py_image_layer into
+interpreter, site-packages and app layers, onto plain Ubuntu. The image has no
+Python besides the one in the runfiles. Bazel is the only build: there is no
+Containerfile.
 """
 
-load("@aspect_bazel_lib//lib:tar.bzl", "tar")
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_image_layer", "py_library")
 load("@container_structure_test//:defs.bzl", "container_structure_test")
 load("@pip//:requirements.bzl", "requirement")
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 
 package(default_visibility = ["//:__subpackages__"])
 
@@ -26,7 +27,7 @@ py_library(
         "service.py",
         "utils.py",
     ],
-    imports = ["../"],
+    imports = [".."],
     deps = [
         requirement("aioboto3"),
         # aioboto3 imports boto3.session directly at module load time
@@ -49,28 +50,43 @@ py_library(
 py_binary(
     name = "serve",
     srcs = ["serve.py"],
-    imports = ["../"],
+    imports = [".."],
     main = "serve.py",
     deps = [":facade_lib"],
 )
 
-tar(
-    name = "app_layer",
-    srcs = [":serve"],
-    include_runfiles = True,
+# The base image's unprivileged `ubuntu` user (uid/gid 1000). The facade runs
+# as it, and owns its runfiles: the launcher creates the binary's venv inside
+# them on every start.
+UBUNTU_UID = "1000"
+
+py_image_layer(
+    name = "layers",
+    binary = ":serve",
+    group = UBUNTU_UID,
+    owner = UBUNTU_UID,
+    platform = "//tools/platforms:linux_x86_64",
 )
 
 oci_image(
     name = "image",
-    base = "@python_3_12_slim",
+    base = "@ubuntu",
     entrypoint = ["/src/facade/serve"],
-    tars = [":app_layer"],
+    exposed_ports = ["8000/tcp"],
+    tars = [":layers"],
+    user = "ubuntu",
+)
+
+platform_transition_filegroup(
+    name = "transitioned_image",
+    srcs = [":image"],
+    target_platform = "//tools/platforms:linux_x86_64",
 )
 
 container_structure_test(
     name = "structure_test",
     configs = ["//src/facade/tests/structural:structure_test.yaml"],
-    image = ":image",
+    image = ":transitioned_image",
 )
 
 # bazel run //src/facade:tarball
@@ -79,7 +95,7 @@ container_structure_test(
 #   docling-serve-ray-facade:latest
 oci_load(
     name = "tarball",
-    image = ":image",
+    image = ":transitioned_image",
     repo_tags = [
         "docling-serve-ray-facade:bazel",
         "docling-serve-ray-facade:latest",
@@ -91,7 +107,7 @@ oci_load(
 # push-images job), after tests pass, on push to main.
 oci_push(
     name = "push",
-    image = ":image",
+    image = ":transitioned_image",
     remote_tags = ["latest"],
     repository = "ghcr.io/k-sparrow/docling-serve-ray-facade",
 )
